@@ -141,17 +141,26 @@ async def test_malformed_chunk_strategy(server: RLMServer):
     )
     doc_id = load_result["loaded"][0]["doc_id"]
 
-    # Missing required fields
-    with pytest.raises((ValueError, KeyError, TypeError)):
+    # Invalid chunk_size (negative)
+    with pytest.raises(ValueError, match="must be positive"):
         await _chunk_create(
             server,
             session_id=session_id,
             doc_id=doc_id,
-            strategy={"type": "fixed"}  # Missing chunk_size
+            strategy={"type": "fixed", "chunk_size": -100}
+        )
+
+    # Invalid overlap (negative)
+    with pytest.raises(ValueError, match="must be non-negative"):
+        await _chunk_create(
+            server,
+            session_id=session_id,
+            doc_id=doc_id,
+            strategy={"type": "fixed", "chunk_size": 1000, "overlap": -10}
         )
 
     # Invalid type
-    with pytest.raises((ValueError, KeyError)):
+    with pytest.raises(ValueError, match="Unknown strategy type"):
         await _chunk_create(
             server,
             session_id=session_id,

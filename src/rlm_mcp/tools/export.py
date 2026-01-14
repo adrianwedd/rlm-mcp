@@ -23,9 +23,10 @@ def register_export_tools(server: "RLMServer") -> None:
         path: str | None = None,
         include_docs: bool = False,
         redact: bool = False,
+        allow_secrets: bool = False,
     ) -> dict[str, Any]:
         """Export session to GitHub repository branch.
-        
+
         Args:
             session_id: Session to export
             repo: Repository (owner/repo or full URL)
@@ -33,6 +34,7 @@ def register_export_tools(server: "RLMServer") -> None:
             path: Export path (default: .rlm/sessions/{timestamp}_{session_id[:8]})
             include_docs: Include raw document content (default: False)
             redact: Scrub secrets from artifacts/traces (default: False)
+            allow_secrets: Allow export even if secrets detected (DANGEROUS, use with caution)
         """
         return await _export_github(
             server,
@@ -42,6 +44,7 @@ def register_export_tools(server: "RLMServer") -> None:
             path=path,
             include_docs=include_docs,
             redact=redact,
+            allow_secrets=allow_secrets,
         )
 
 
@@ -55,7 +58,6 @@ async def _export_github(
     include_docs: bool = False,
     redact: bool = False,
     allow_secrets: bool = False,
-    token: str | None = None,
 ) -> dict[str, Any]:
     """Export session to GitHub."""
     from rlm_mcp.export.github import export_to_github

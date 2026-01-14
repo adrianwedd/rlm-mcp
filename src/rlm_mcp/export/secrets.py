@@ -14,7 +14,7 @@ from typing import Tuple
 SECRET_PATTERNS: list[tuple[str, str]] = [
     (r'(?i)(api[_\-\s]?key|apikey)\s*[:=]\s*["\']?[\w-]{20,}', 'API Key'),
     (r'(?i)(secret|token|password|passwd|pwd)\s*[:=]\s*["\']?[\w-]{8,}', 'Secret/Password'),
-    (r'sk[_-][a-zA-Z0-9_]{20,}', 'OpenAI API Key'),
+    (r'sk-[a-zA-Z0-9_]{20,}', 'OpenAI API Key'),
     (r'sk-ant-[a-zA-Z0-9-]{20,}', 'Anthropic API Key'),
     (r'ghp_[a-zA-Z0-9]{36}', 'GitHub PAT'),
     (r'gho_[a-zA-Z0-9]{36}', 'GitHub OAuth'),
