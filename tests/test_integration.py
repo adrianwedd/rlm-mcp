@@ -1,18 +1,15 @@
-"""Integration smoke test: exercises all 13 tools in a happy path.
+"""Integration smoke test: exercises core RLM tools in a happy path.
 
 This test validates the full workflow:
-session.create → docs.load → docs.list → docs.peek → search.query → 
-chunk.create → span.get → artifact.store → artifact.list → artifact.get → 
+session.create → docs.load → docs.list → docs.peek → search.query →
+chunk.create → span.get → artifact.store → artifact.list → artifact.get →
 session.info → session.close
-
-GitHub export (rlm.export.github) is mocked since it requires external auth.
 """
 
 from __future__ import annotations
 
 import logging
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from rlm_mcp.server import RLMServer
 from rlm_mcp.config import ServerConfig
@@ -305,43 +302,6 @@ async def test_char_limit_enforcement(server: RLMServer):
 
     assert len(peek_result["content"]) == 100
     assert peek_result["truncated"]
-
-
-@pytest.mark.asyncio
-async def test_export_github_mock(server: RLMServer):
-    """Test GitHub export with mocked API."""
-    from rlm_mcp.tools.session import _session_create, _session_close
-    from rlm_mcp.tools.docs import _docs_load
-    from rlm_mcp.tools.export import _export_github
-    
-    # Create and populate session
-    session = await _session_create(server, name="export-test")
-    session_id = session["session_id"]
-    
-    await _docs_load(
-        server,
-        session_id=session_id,
-        sources=[{"type": "inline", "content": "Test content for export"}],
-    )
-    await _session_close(server, session_id=session_id)
-    
-    # Mock GitHub API
-    with patch("rlm_mcp.export.github.export_to_github") as mock_export:
-        mock_export.return_value = {
-            "commit_sha": "abc123",
-            "files_exported": 3,
-        }
-        
-        result = await _export_github(
-            server,
-            session_id=session_id,
-            repo="owner/repo",
-        )
-        
-        assert result["commit_sha"] == "abc123"
-        assert "branch" in result
-        assert "export_path" in result  # Key fix from v0.1.2
-        assert result["branch"].startswith("rlm/session/")
 
 
 class TestToolNaming:

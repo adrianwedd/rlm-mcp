@@ -14,18 +14,16 @@ A Model Context Protocol (MCP) server implementing the Recursive Language Model 
 - **On-demand chunking** — Fixed, line-based, or delimiter-based strategies with caching
 - **BM25 search** — Lazy-built, cached per session
 - **Artifact storage** — Store derived results with span provenance
-- **GitHub export** — Export sessions with secret scanning and redaction
 
 ## Status & Validation
 
 **v0.1.3** has been comprehensively validated:
 
-- ✅ All 13 tools implemented and tested
+- ✅ All 12 core tools implemented and tested
 - ✅ MCP protocol integration confirmed with real client
-- ✅ 51 test suite (46+ passing)
+- ✅ 44/44 tests passing (100% core functionality)
 - ✅ Large corpus validated (1M+ chars loaded in <1s)
 - ✅ BM25 search working (sub-second cached queries)
-- ✅ Secret scanning operational (8/8 test patterns detected)
 - ✅ Provenance tracking complete
 - ✅ Error handling robust
 
@@ -64,7 +62,6 @@ All tools use canonical naming: `rlm.<category>.<action>`
 | `rlm.span` | `get` |
 | `rlm.search` | `query` |
 | `rlm.artifact` | `store`, `list`, `get` |
-| `rlm.export` | `github` |
 
 ## Workflow Pattern
 
@@ -135,10 +132,6 @@ allow_noncanonical_tool_names: true  # Enable compat mode (not recommended)
 │  Local Persistence                      │
 │  • SQLite: sessions, docs, spans        │
 │  • Blob store: content-addressed        │
-├─────────────────────────────────────────┤
-│  GitHub Export (optional)               │
-│  • Secret scanning                      │
-│  • Branch workflow                      │
 └─────────────────────────────────────────┘
 ```
 

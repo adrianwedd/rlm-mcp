@@ -120,15 +120,13 @@ class RLMServer:
         from rlm_mcp.tools.chunks import register_chunk_tools
         from rlm_mcp.tools.search import register_search_tools
         from rlm_mcp.tools.artifacts import register_artifact_tools
-        from rlm_mcp.tools.export import register_export_tools
-        
+
         # Register each category
         register_session_tools(self)
         register_docs_tools(self)
         register_chunk_tools(self)
         register_search_tools(self)
         register_artifact_tools(self)
-        register_export_tools(self)
     
     def tool(self, name: str):
         """Register a tool with canonical naming.

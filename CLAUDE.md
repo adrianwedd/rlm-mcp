@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 RLM-MCP is a Model Context Protocol (MCP) server implementing the Recursive Language Model pattern from Zhang et al. (2025). It enables LLMs to process arbitrarily long contexts by treating prompts as external environment objects rather than feeding them directly into the neural network.
 
-The server exposes tools for session management, document loading, chunking, BM25 search, artifact storage, and GitHub export. Claude Code acts as the orchestrator, making LLM subcalls while the MCP server provides the "world" (document storage, search, etc.).
+The server exposes tools for session management, document loading, chunking, BM25 search, and artifact storage. Claude Code acts as the orchestrator, making LLM subcalls while the MCP server provides the "world" (document storage, search, etc.).
 
 ## Common Commands
 
@@ -92,7 +92,7 @@ The client (Claude Code) makes all LLM subcalls. The server is the "world" that 
 - `FastMCP` supports canonical naming via `.tool(name=...)` decorator
 - `named_tool()` decorator handles SDK compatibility (strict mode requires `tool(name=...)` support)
 - `tool_handler()` decorator wraps handlers for tracing and budget enforcement
-- Tool categories: session, docs, chunk, span, search, artifact, export
+- Tool categories: session, docs, chunk, span, search, artifact
 - **Important**: Must use `FastMCP`, not base `Server` class, for canonical tool naming
 
 **Storage Layer** (`src/rlm_mcp/storage/`):
@@ -117,12 +117,6 @@ The client (Claude Code) makes all LLM subcalls. The server is the "world" that 
 - `chunks.py`: On-demand chunking (fixed/lines/delimiter strategies)
 - `search.py`: BM25 search with span references
 - `artifacts.py`: Store/list/get derived results with provenance
-- `export.py`: GitHub export with secret scanning
-
-**GitHub Export** (`src/rlm_mcp/export/`):
-- Branch workflow (never touches main): `rlm-sessions/{session-id}/{timestamp}`
-- Secret scanning with regex patterns
-- Idempotent exports (checks for existing branches)
 
 ### Key Design Principles
 
