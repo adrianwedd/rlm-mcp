@@ -1,0 +1,7 @@
+{
+  "rlm-mcp": {
+    "command": "/Users/adrian/repos/rlm-mcp/.venv/bin/python3",
+    "args": ["-m", "rlm_mcp.server"],
+    "cwd": "/Users/adrian/repos/rlm-mcp"
+  }
+}

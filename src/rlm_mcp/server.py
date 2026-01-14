@@ -1,0 +1,298 @@
+"""RLM-MCP Server - Recursive Language Model MCP Server.
+
+A Model Context Protocol server that implements the RLM pattern from
+Zhang et al. (2025), treating prompts as external environment objects
+for programmatic manipulation.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime
+from functools import wraps
+from typing import Any, Callable, TypeVar
+
+from mcp.server.fastmcp import FastMCP
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+from rlm_mcp.config import ServerConfig, ensure_directories, load_config
+from rlm_mcp.models import Session, TraceEntry
+from rlm_mcp.storage import BlobStore, Database
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Type for tool handlers
+T = TypeVar("T")
+
+# Track whether we've warned about tool naming (one-time only)
+_WARNED_NO_NAME_SUPPORT = False
+
+
+class ToolNamingError(Exception):
+    """Raised when canonical tool naming fails in strict mode."""
+    pass
+
+
+def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True):
+    """Register a tool with canonical naming.
+    
+    Args:
+        mcp_server: The MCP Server instance
+        canonical_name: Canonical tool name (e.g., "rlm.session.create")
+        strict: If True (default), fail fast when SDK doesn't support name=.
+                If False, fall back to function names with a warning.
+    
+    Raises:
+        ToolNamingError: In strict mode, if SDK doesn't support canonical naming.
+    """
+    global _WARNED_NO_NAME_SUPPORT
+    
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        global _WARNED_NO_NAME_SUPPORT
+        try:
+            # Try with explicit name parameter
+            return mcp_server.tool(name=canonical_name)(func)
+        except TypeError as e:
+            if "name" not in str(e):
+                raise
+            
+            # SDK doesn't support name= parameter
+            if strict:
+                raise ToolNamingError(
+                    f"MCP SDK doesn't support tool(name=...). "
+                    f"Cannot register '{canonical_name}' with canonical name. "
+                    f"Either upgrade to FastMCP/newer SDK, or set "
+                    f"allow_noncanonical_tool_names=True in server config."
+                ) from e
+            
+            # Compat mode: fall back with one-time warning
+            if not _WARNED_NO_NAME_SUPPORT:
+                logger.warning(
+                    "MCP SDK doesn't support tool(name=...). "
+                    "Falling back to function names (e.g., 'rlm_session_create' "
+                    "instead of 'rlm.session.create'). Skills and clients "
+                    "expecting canonical names may not work correctly."
+                )
+                _WARNED_NO_NAME_SUPPORT = True
+            
+            return mcp_server.tool()(func)
+    
+    return decorator
+
+
+class RLMServer:
+    """RLM-MCP Server with middleware for tracing, budgets, and char caps."""
+    
+    def __init__(self, config: ServerConfig | None = None):
+        self.config = config or load_config()
+        ensure_directories(self.config)
+        
+        self.db = Database(self.config.database_path)
+        self.blobs = BlobStore(self.config.blob_dir)
+        
+        # MCP server instance
+        self.mcp = FastMCP("rlm-mcp")
+        
+        # Session index cache (lazy-built BM25 indexes)
+        self._index_cache: dict[str, Any] = {}
+        
+        # Register tools
+        self._register_tools()
+    
+    async def start(self) -> None:
+        """Start the server."""
+        await self.db.connect()
+    
+    async def stop(self) -> None:
+        """Stop the server."""
+        await self.db.close()
+    
+    def _register_tools(self) -> None:
+        """Register all MCP tools."""
+        # Import tool handlers
+        from rlm_mcp.tools.session import register_session_tools
+        from rlm_mcp.tools.docs import register_docs_tools
+        from rlm_mcp.tools.chunks import register_chunk_tools
+        from rlm_mcp.tools.search import register_search_tools
+        from rlm_mcp.tools.artifacts import register_artifact_tools
+        from rlm_mcp.tools.export import register_export_tools
+        
+        # Register each category
+        register_session_tools(self)
+        register_docs_tools(self)
+        register_chunk_tools(self)
+        register_search_tools(self)
+        register_artifact_tools(self)
+        register_export_tools(self)
+    
+    def tool(self, name: str):
+        """Register a tool with canonical naming.
+        
+        Uses named_tool wrapper. By default, fails fast if SDK doesn't support
+        canonical naming. Set allow_noncanonical_tool_names=True in config
+        to fall back to function names (not recommended for production).
+        
+        Args:
+            name: Canonical tool name (e.g., "rlm.session.create")
+        """
+        strict = not self.config.allow_noncanonical_tool_names
+        return named_tool(self.mcp, name, strict=strict)
+    
+    # --- Middleware ---
+    
+    async def check_budget(self, session_id: str) -> tuple[bool, int, int]:
+        """Check if session has remaining tool call budget.
+        
+        Returns:
+            (allowed, used, remaining)
+        """
+        session = await self.db.get_session(session_id)
+        if session is None:
+            return False, 0, 0
+        
+        max_calls = session.config.max_tool_calls
+        used = session.tool_calls_used
+        remaining = max_calls - used
+        
+        return remaining > 0, used, remaining
+    
+    async def increment_budget(self, session_id: str) -> int:
+        """Increment tool call counter, return new used count."""
+        return await self.db.increment_tool_calls(session_id)
+    
+    async def log_trace(
+        self,
+        session_id: str,
+        operation: str,
+        input_data: dict[str, Any],
+        output_data: dict[str, Any],
+        duration_ms: int,
+        client_reported: dict[str, Any] | None = None,
+    ) -> None:
+        """Log a trace entry."""
+        trace = TraceEntry(
+            session_id=session_id,
+            operation=operation,
+            input=input_data,
+            output=output_data,
+            duration_ms=duration_ms,
+            client_reported=client_reported,
+        )
+        await self.db.create_trace(trace)
+    
+    def get_char_limit(self, session: Session, limit_type: str) -> int:
+        """Get character limit for a session.
+        
+        Args:
+            session: Session instance
+            limit_type: 'response' or 'peek'
+            
+        Returns:
+            Character limit
+        """
+        if limit_type == "peek":
+            return session.config.max_chars_per_peek
+        return session.config.max_chars_per_response
+    
+    def truncate_content(
+        self, 
+        content: str, 
+        max_chars: int
+    ) -> tuple[str, bool]:
+        """Truncate content to max chars.
+        
+        Returns:
+            (content, truncated)
+        """
+        if len(content) <= max_chars:
+            return content, False
+        return content[:max_chars], True
+
+
+def tool_handler(operation: str):
+    """Decorator for tool handlers with tracing and budget middleware.
+    
+    Args:
+        operation: Canonical operation name (e.g., "rlm.session.create")
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        async def wrapper(server: RLMServer, **kwargs: Any) -> Any:
+            start_time = time.time()
+            session_id = kwargs.get("session_id")
+            
+            # Budget check (skip only for session.create which has no session_id yet)
+            if session_id and operation != "rlm.session.create":
+                allowed, used, remaining = await server.check_budget(session_id)
+                if not allowed:
+                    raise ValueError(
+                        f"Tool call budget exceeded: {used} calls used, "
+                        f"0 remaining. Close session or increase max_tool_calls."
+                    )
+                await server.increment_budget(session_id)
+            
+            # Execute handler
+            try:
+                result = await func(server, **kwargs)
+                
+                # Log trace
+                duration_ms = int((time.time() - start_time) * 1000)
+                if session_id:
+                    await server.log_trace(
+                        session_id=session_id,
+                        operation=operation,
+                        input_data=kwargs,
+                        output_data=result if isinstance(result, dict) else {"result": str(result)},
+                        duration_ms=duration_ms,
+                    )
+                
+                return result
+            except Exception as e:
+                # Log failed trace
+                duration_ms = int((time.time() - start_time) * 1000)
+                if session_id:
+                    await server.log_trace(
+                        session_id=session_id,
+                        operation=operation,
+                        input_data=kwargs,
+                        output_data={"error": str(e)},
+                        duration_ms=duration_ms,
+                    )
+                raise
+        
+        return wrapper
+    return decorator
+
+
+@asynccontextmanager
+async def create_server(config: ServerConfig | None = None):
+    """Create and manage server lifecycle."""
+    server = RLMServer(config)
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+async def run_server() -> None:
+    """Run the MCP server."""
+    config = load_config()
+
+    async with create_server(config) as server:
+        # FastMCP handles stdio internally
+        await server.mcp.run_stdio_async()
+
+
+def main() -> None:
+    """Entry point."""
+    asyncio.run(run_server())
+
+
+if __name__ == "__main__":
+    main()
