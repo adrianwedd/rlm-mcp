@@ -57,7 +57,7 @@ async def test_export_with_secrets_fails_by_default(server: RLMServer):
     )
 
     # Mock GitHub API
-    with patch('rlm_mcp.export.github.Github') as mock_github:
+    with patch('github.Github') as mock_github:
         mock_repo = MagicMock()
         mock_github.return_value.get_repo.return_value = mock_repo
 
@@ -92,7 +92,7 @@ async def test_export_with_secrets_redacted(server: RLMServer):
     )
 
     # Mock GitHub API
-    with patch('rlm_mcp.export.github.Github') as mock_github:
+    with patch('github.Github') as mock_github:
         mock_repo = MagicMock()
         mock_branch = MagicMock()
         mock_commit = MagicMock()

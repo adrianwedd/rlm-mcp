@@ -37,9 +37,12 @@ async def test_span_get_includes_provenance(server: RLMServer):
     span_id = chunk_result["spans"][0]["span_id"]
 
     # Get span
-    span_result = await _span_get(server, session_id=session_id, span_id=span_id)
+    span_results = await _span_get(server, session_id=session_id, span_ids=[span_id])
 
     # Verify provenance fields
+    assert "spans" in span_results
+    assert len(span_results["spans"]) == 1
+    span_result = span_results["spans"][0]
     assert "span_id" in span_result
     assert "span" in span_result
     assert "doc_id" in span_result["span"]

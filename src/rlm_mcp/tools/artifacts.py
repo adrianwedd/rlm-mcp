@@ -178,6 +178,7 @@ async def _artifact_list(
                 "span_id": a.span_id,
                 "type": a.type,
                 "created_at": a.created_at.isoformat(),
+                "provenance": a.provenance.model_dump(mode='json') if a.provenance else None,
             }
             for a in artifacts
         ],

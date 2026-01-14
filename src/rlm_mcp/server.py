@@ -228,11 +228,17 @@ def tool_handler(operation: str):
             
             # Budget check (skip only for session.create which has no session_id yet)
             if session_id and operation != "rlm.session.create":
+                # First verify session exists (avoid confusing error messages)
+                session = await server.db.get_session(session_id)
+                if session is None:
+                    raise ValueError(f"Session not found: {session_id}")
+
+                # Then check budget
                 allowed, used, remaining = await server.check_budget(session_id)
                 if not allowed:
                     raise ValueError(
                         f"Tool call budget exceeded: {used} calls used, "
-                        f"0 remaining. Close session or increase max_tool_calls."
+                        f"{remaining} remaining. Close session or increase max_tool_calls."
                     )
                 await server.increment_budget(session_id)
             

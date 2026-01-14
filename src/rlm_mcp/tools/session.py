@@ -58,9 +58,12 @@ async def _session_create(
     """Create a new session."""
     session_config = SessionConfig(**(config or {}))
     session = Session(name=name, config=session_config)
-    
+
     await server.db.create_session(session)
-    
+
+    # Count session.create as a tool call
+    await server.increment_budget(session.id)
+
     return {
         "session_id": session.id,
         "created_at": session.created_at.isoformat(),

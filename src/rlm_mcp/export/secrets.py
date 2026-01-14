@@ -12,16 +12,16 @@ from typing import Tuple
 
 # Secret detection patterns
 SECRET_PATTERNS: list[tuple[str, str]] = [
-    (r'(?i)(api[_-]?key|apikey)\s*[:=]\s*["\']?[\w-]{20,}', 'API Key'),
+    (r'(?i)(api[_\-\s]?key|apikey)\s*[:=]\s*["\']?[\w-]{20,}', 'API Key'),
     (r'(?i)(secret|token|password|passwd|pwd)\s*[:=]\s*["\']?[\w-]{8,}', 'Secret/Password'),
-    (r'sk-[a-zA-Z0-9]{20,}', 'OpenAI API Key'),
+    (r'sk[_-][a-zA-Z0-9_]{20,}', 'OpenAI API Key'),
     (r'sk-ant-[a-zA-Z0-9-]{20,}', 'Anthropic API Key'),
     (r'ghp_[a-zA-Z0-9]{36}', 'GitHub PAT'),
     (r'gho_[a-zA-Z0-9]{36}', 'GitHub OAuth'),
     (r'-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----', 'Private Key'),
     (r'(?i)bearer\s+[a-zA-Z0-9._-]{20,}', 'Bearer Token'),
     (r'AKIA[0-9A-Z]{16}', 'AWS Access Key ID'),
-    (r'(?i)aws.{0,20}secret.{0,20}[\'"][0-9a-zA-Z/+]{40}[\'"]', 'AWS Secret Key'),
+    (r'(?i)aws.{0,20}secret.{0,20}[\'"]?[0-9a-zA-Z/+]{40}[\'"]?', 'AWS Secret Key'),
 ]
 
 # Compile patterns for performance

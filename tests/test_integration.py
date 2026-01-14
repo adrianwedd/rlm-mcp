@@ -252,21 +252,23 @@ async def test_budget_enforcement(server: RLMServer):
     session = await _session_create(
         server,
         name="budget-test",
-        config={"max_tool_calls": 2},
+        config={"max_tool_calls": 3},
     )
     session_id = session["session_id"]
-    
-    # First call (uses 1)
+
+    # session.create counted as call 1
+
+    # Second call (uses 2)
     await _docs_load(
         server,
         session_id=session_id,
         sources=[{"type": "inline", "content": "test"}],
     )
-    
-    # Second call (uses 2)
+
+    # Third call (uses 3)
     await _session_info(server, session_id=session_id)
-    
-    # Third call should fail
+
+    # Fourth call should fail
     with pytest.raises(ValueError, match="budget exceeded"):
         await _session_info(server, session_id=session_id)
 

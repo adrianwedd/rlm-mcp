@@ -60,8 +60,16 @@ class BaseChunkStrategy(ABC):
 
 class FixedChunkStrategy(BaseChunkStrategy):
     """Fixed-size character chunks with optional overlap."""
-    
+
     def __init__(self, chunk_size: int, overlap: int = 0):
+        if overlap >= chunk_size:
+            raise ValueError(
+                f"Overlap ({overlap}) must be less than chunk_size ({chunk_size})"
+            )
+        if overlap < 0:
+            raise ValueError(f"Overlap must be non-negative, got {overlap}")
+        if chunk_size <= 0:
+            raise ValueError(f"Chunk size must be positive, got {chunk_size}")
         self.chunk_size = chunk_size
         self.overlap = overlap
     
@@ -77,8 +85,16 @@ class FixedChunkStrategy(BaseChunkStrategy):
 
 class LinesChunkStrategy(BaseChunkStrategy):
     """Chunk by line count with optional overlap."""
-    
+
     def __init__(self, line_count: int, overlap: int = 0):
+        if overlap >= line_count:
+            raise ValueError(
+                f"Overlap ({overlap}) must be less than line_count ({line_count})"
+            )
+        if overlap < 0:
+            raise ValueError(f"Overlap must be non-negative, got {overlap}")
+        if line_count <= 0:
+            raise ValueError(f"Line count must be positive, got {line_count}")
         self.line_count = line_count
         self.overlap = overlap
     
@@ -141,23 +157,27 @@ class DelimiterChunkStrategy(BaseChunkStrategy):
 def create_strategy(strategy_spec: dict[str, Any]) -> BaseChunkStrategy:
     """Create chunking strategy from spec."""
     strategy_type = strategy_spec.get("type", "fixed")
-    
+
     if strategy_type == "fixed":
-        chunk_size = strategy_spec.get("chunk_size", 50000)
+        if "chunk_size" not in strategy_spec:
+            raise ValueError("Fixed strategy requires 'chunk_size' parameter")
+        chunk_size = strategy_spec["chunk_size"]
         overlap = strategy_spec.get("overlap", 0)
         return FixedChunkStrategy(chunk_size, overlap)
-    
+
     elif strategy_type == "lines":
-        line_count = strategy_spec.get("line_count", 100)
+        if "line_count" not in strategy_spec:
+            raise ValueError("Lines strategy requires 'line_count' parameter")
+        line_count = strategy_spec["line_count"]
         overlap = strategy_spec.get("overlap", 0)
         return LinesChunkStrategy(line_count, overlap)
-    
+
     elif strategy_type == "delimiter":
         delimiter = strategy_spec.get("delimiter")
         if not delimiter:
             raise ValueError("Delimiter strategy requires 'delimiter' parameter")
         return DelimiterChunkStrategy(delimiter)
-    
+
     else:
         raise ValueError(f"Unknown strategy type: {strategy_type}")
 

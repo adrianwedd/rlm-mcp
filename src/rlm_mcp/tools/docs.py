@@ -87,11 +87,11 @@ async def _docs_load(
         try:
             if source_type == "inline":
                 # Inline content
-                content = source_spec.get("content", "")
-                if not content:
+                if "content" not in source_spec:
                     errors.append("Inline source missing content")
                     continue
-                
+                content = source_spec["content"]
+
                 docs = [await _load_inline(server, session_id, content, source_spec)]
                 
             elif source_type == "file":

@@ -54,6 +54,8 @@ async def _export_github(
     path: str | None = None,
     include_docs: bool = False,
     redact: bool = False,
+    allow_secrets: bool = False,
+    token: str | None = None,
 ) -> dict[str, Any]:
     """Export session to GitHub."""
     from rlm_mcp.export.github import export_to_github
@@ -115,7 +117,7 @@ async def _export_github(
     # Secret scanning
     secrets_found = 0
     warnings = []
-    
+
     if redact:
         # Redact artifacts
         for artifact in artifacts:
@@ -124,7 +126,7 @@ async def _export_github(
             if count > 0:
                 secrets_found += count
                 # Note: In full impl, would update artifact.content
-        
+
         # Redact traces
         for trace in traces:
             input_str = str(trace.input)
@@ -140,7 +142,14 @@ async def _export_github(
             if findings:
                 secrets_found += len(findings)
                 warnings.append(f"Artifact {artifact.id} contains {len(findings)} potential secrets")
-    
+
+    # Enforce secret policy
+    if secrets_found > 0 and not allow_secrets and not redact:
+        raise ValueError(
+            f"Export blocked: {secrets_found} secrets found. "
+            f"Use redact=True to scrub secrets or allow_secrets=True to export anyway."
+        )
+
     # Export to GitHub
     result = await export_to_github(
         repo=repo,
