@@ -24,7 +24,11 @@ class ServerConfig(BaseModel):
     default_max_tool_calls: int = 500
     default_max_chars_per_response: int = 50_000
     default_max_chars_per_peek: int = 10_000
-    
+
+    # Batch loading configuration
+    max_concurrent_loads: int = 20  # Max concurrent file loads (memory safety)
+    max_file_size_mb: int = 100  # Max file size in megabytes
+
     # Tool naming: strict by default (fail if SDK doesn't support canonical names)
     # Set to True only for experimentation with older SDKs
     allow_noncanonical_tool_names: bool = False

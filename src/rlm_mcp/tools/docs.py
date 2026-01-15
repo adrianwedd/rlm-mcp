@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -67,11 +68,11 @@ async def _docs_load(
     session_id: str,
     sources: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Load documents into session."""
+    """Load documents into session with batch insert and concurrency control."""
     session = await server.db.get_session(session_id)
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
-    
+
     # Invalidate BM25 index (new docs make it stale)
     # 1. Invalidate in-memory cache
     if session_id in server._index_cache:
@@ -80,68 +81,88 @@ async def _docs_load(
     # 2. Invalidate persisted index on disk
     server.index_persistence.invalidate_index(session_id)
 
+    # Create semaphore for concurrency control
+    max_concurrent = server.config.max_concurrent_loads
+    semaphore = asyncio.Semaphore(max_concurrent)
+
     loaded = []
     errors = []
-    total_chars = 0
-    total_tokens_est = 0
-    
-    for source_spec in sources:
+    all_docs = []  # Collect all documents for batch insert
+
+    # Process each source
+    async def load_source(source_spec):
+        """Load a single source with semaphore control."""
         source_type = source_spec.get("type", "file")
-        
+
         try:
             if source_type == "inline":
                 # Inline content
                 if "content" not in source_spec:
-                    errors.append("Inline source missing content")
-                    continue
+                    return None, "Inline source missing content"
                 content = source_spec["content"]
+                docs = [await _load_inline_no_save(server, session_id, content, source_spec)]
 
-                docs = [await _load_inline(server, session_id, content, source_spec)]
-                
             elif source_type == "file":
-                # Single file
+                # Single file (with semaphore)
                 path = source_spec.get("path")
                 if not path:
-                    errors.append("File source missing path")
-                    continue
-                
-                docs = [await _load_file(server, session_id, Path(path), source_spec)]
-                
+                    return None, "File source missing path"
+
+                async with semaphore:
+                    docs = [await _load_file_no_save(server, session_id, Path(path), source_spec)]
+
             elif source_type == "glob":
-                # Glob pattern
+                # Glob pattern (concurrent file loads with semaphore)
                 path = source_spec.get("path")
                 if not path:
-                    errors.append("Glob source missing path")
-                    continue
-                
-                docs = await _load_glob(server, session_id, path, source_spec)
-                
+                    return None, "Glob source missing path"
+
+                docs = await _load_glob_concurrent(server, session_id, path, source_spec, semaphore)
+
             elif source_type == "directory":
-                # Directory
+                # Directory (concurrent file loads with semaphore)
                 path = source_spec.get("path")
                 if not path:
-                    errors.append("Directory source missing path")
-                    continue
-                
-                docs = await _load_directory(server, session_id, Path(path), source_spec)
+                    return None, "Directory source missing path"
+
+                docs = await _load_directory_concurrent(server, session_id, Path(path), source_spec, semaphore)
             else:
-                errors.append(f"Unknown source type: {source_type}")
-                continue
-            
-            for doc in docs:
-                loaded.append({
-                    "doc_id": doc.id,
-                    "content_hash": doc.content_hash,
-                    "source": str(doc.source.path or doc.source.url or "inline"),
-                    "length_chars": doc.length_chars,
-                    "length_tokens_est": doc.length_tokens_est,
-                })
-                total_chars += doc.length_chars
-                total_tokens_est += doc.length_tokens_est
-                
+                return None, f"Unknown source type: {source_type}"
+
+            return docs, None
+
         except Exception as e:
-            errors.append(f"Error loading {source_spec}: {e}")
-    
+            return None, f"Error loading {source_spec}: {e}"
+
+    # Load all sources concurrently
+    results = await asyncio.gather(*[load_source(spec) for spec in sources])
+
+    # Process results
+    for docs, error in results:
+        if error:
+            errors.append(error)
+        elif docs:
+            all_docs.extend(docs)
+
+    # Batch insert all documents
+    if all_docs:
+        await server.db.create_documents_batch(all_docs)
+
+    # Build response
+    total_chars = 0
+    total_tokens_est = 0
+
+    for doc in all_docs:
+        loaded.append({
+            "doc_id": doc.id,
+            "content_hash": doc.content_hash,
+            "source": str(doc.source.path or doc.source.url or "inline"),
+            "length_chars": doc.length_chars,
+            "length_tokens_est": doc.length_tokens_est,
+        })
+        total_chars += doc.length_chars
+        total_tokens_est += doc.length_tokens_est
+
     return {
         "loaded": loaded,
         "errors": errors,
@@ -285,6 +306,157 @@ async def _load_directory(
             pass
     
     return docs
+
+
+# --- No-save versions for batch loading ---
+
+async def _load_inline_no_save(
+    server: "RLMServer",
+    session_id: str,
+    content: str,
+    source_spec: dict[str, Any],
+) -> Document:
+    """Load inline content as document (no DB save)."""
+    content_hash = server.blobs.put(content)
+    token_hint = source_spec.get("token_count_hint")
+
+    doc = Document(
+        session_id=session_id,
+        content_hash=content_hash,
+        source=DocumentSource(type="inline"),
+        length_chars=len(content),
+        length_tokens_est=estimate_tokens(len(content), token_hint),
+    )
+    return doc
+
+
+async def _load_file_no_save(
+    server: "RLMServer",
+    session_id: str,
+    path: Path,
+    source_spec: dict[str, Any],
+) -> Document:
+    """Load a single file as document (no DB save)."""
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    # Check file size limit
+    file_size_mb = path.stat().st_size / (1024 * 1024)
+    if file_size_mb > server.config.max_file_size_mb:
+        raise ValueError(
+            f"File too large: {path} ({file_size_mb:.1f}MB > {server.config.max_file_size_mb}MB limit)"
+        )
+
+    content = path.read_text(encoding="utf-8")
+    content_hash = server.blobs.put(content)
+    token_hint = source_spec.get("token_count_hint")
+
+    doc = Document(
+        session_id=session_id,
+        content_hash=content_hash,
+        source=DocumentSource(type="file", path=str(path.absolute())),
+        length_chars=len(content),
+        length_tokens_est=estimate_tokens(len(content), token_hint),
+        metadata={"filename": path.name},
+    )
+    return doc
+
+
+async def _load_glob_concurrent(
+    server: "RLMServer",
+    session_id: str,
+    pattern: str,
+    source_spec: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> list[Document]:
+    """Load files matching glob pattern with concurrent loading."""
+    import glob as glob_module
+
+    recursive = source_spec.get("recursive", False)
+    include_pattern = source_spec.get("include_pattern")
+    exclude_pattern = source_spec.get("exclude_pattern")
+
+    # Find matching files
+    if recursive:
+        files = list(Path(".").glob(f"**/{pattern}"))
+    else:
+        files = [Path(p) for p in glob_module.glob(pattern)]
+
+    # Filter
+    if include_pattern:
+        import re
+        include_re = re.compile(include_pattern)
+        files = [f for f in files if include_re.search(str(f))]
+
+    if exclude_pattern:
+        import re
+        exclude_re = re.compile(exclude_pattern)
+        files = [f for f in files if not exclude_re.search(str(f))]
+
+    # Load files concurrently with semaphore
+    async def load_with_semaphore(file_path):
+        if not file_path.is_file():
+            return None
+        async with semaphore:
+            try:
+                return await _load_file_no_save(server, session_id, file_path, source_spec)
+            except Exception:
+                # Skip files that can't be loaded
+                return None
+
+    docs = await asyncio.gather(*[load_with_semaphore(f) for f in files])
+    return [doc for doc in docs if doc is not None]
+
+
+async def _load_directory_concurrent(
+    server: "RLMServer",
+    session_id: str,
+    dir_path: Path,
+    source_spec: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> list[Document]:
+    """Load all files in directory with concurrent loading."""
+    if not dir_path.exists():
+        raise FileNotFoundError(f"Directory not found: {dir_path}")
+
+    if not dir_path.is_dir():
+        raise ValueError(f"Not a directory: {dir_path}")
+
+    recursive = source_spec.get("recursive", False)
+    include_pattern = source_spec.get("include_pattern")
+    exclude_pattern = source_spec.get("exclude_pattern")
+
+    # Find files
+    if recursive:
+        files = list(dir_path.rglob("*"))
+    else:
+        files = list(dir_path.iterdir())
+
+    # Filter to files only
+    files = [f for f in files if f.is_file()]
+
+    # Apply patterns
+    if include_pattern:
+        import re
+        include_re = re.compile(include_pattern)
+        files = [f for f in files if include_re.search(str(f))]
+
+    if exclude_pattern:
+        import re
+        exclude_re = re.compile(exclude_pattern)
+        files = [f for f in files if not exclude_re.search(str(f))]
+
+    # Load files concurrently with semaphore
+    async def load_with_semaphore(file_path):
+        async with semaphore:
+            try:
+                return await _load_file_no_save(server, session_id, file_path, source_spec)
+            except Exception:
+                # Skip files that can't be read as text
+                return None
+
+    docs = await asyncio.gather(*[load_with_semaphore(f) for f in files])
+    return [doc for doc in docs if doc is not None]
 
 
 @tool_handler("rlm.docs.list")

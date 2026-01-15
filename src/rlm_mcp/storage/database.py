@@ -179,7 +179,45 @@ class Database:
             ),
         )
         await self.conn.commit()
-    
+
+    async def create_documents_batch(self, documents: list[Document]) -> None:
+        """Insert multiple documents in a single transaction.
+
+        Uses executemany() for better performance when loading many documents.
+        All inserts succeed or all fail (atomic transaction).
+
+        Args:
+            documents: List of Document objects to insert
+        """
+        if not documents:
+            return
+
+        # Prepare batch data
+        batch_data = [
+            (
+                doc.id,
+                doc.session_id,
+                doc.content_hash,
+                doc.source.model_dump_json(),
+                doc.length_chars,
+                doc.length_tokens_est,
+                json.dumps(doc.metadata),
+                doc.created_at.isoformat(),
+            )
+            for doc in documents
+        ]
+
+        # Insert all documents in single transaction
+        await self.conn.executemany(
+            """
+            INSERT INTO documents (id, session_id, content_hash, source, length_chars,
+                                   length_tokens_est, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch_data,
+        )
+        await self.conn.commit()
+
     async def get_documents(self, session_id: str, limit: int = 100, offset: int = 0) -> list[Document]:
         """Get documents for a session."""
         async with self.conn.execute(
