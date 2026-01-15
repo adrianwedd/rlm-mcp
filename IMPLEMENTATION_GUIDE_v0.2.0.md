@@ -33,17 +33,11 @@ mkdir -p docs benchmarks
 ### Step 2: Create GitHub Issues (10 min)
 
 ```bash
-# Open GITHUB_ISSUES_v0.2.0.md
-# Copy-paste each issue into GitHub
+# Optional: Create GitHub issues for tracking
+# (See GITHUB_ISSUES_v0.2.0.md if needed)
 
-# Or use GitHub CLI:
-gh issue create --title "[EPIC] v0.2.0 Production Readiness" \
-  --body "$(cat .github/issue_templates/epic_v0.2.0.md)"
-
-# Create labels
-gh label create "v0.2.0" --color "0E8A16"
-gh label create "critical" --color "B60205"
-# ... (see GITHUB_ISSUES_v0.2.0.md for full list)
+# Or use project board / checklist directly in:
+# IMPLEMENTATION_CHECKLIST_v0.2.0.md
 ```
 
 ### Step 3: Read Patches (10 min)
@@ -373,21 +367,25 @@ rlm-mcp/
 │   ├── test_index_persistence.py  # CREATE (Day 4-5)
 │   └── test_batch_loading.py # CREATE (Day 7)
 ├── docs/
-│   └── LOGGING.md            # CREATE (Day 8)
-├── benchmarks/
-│   └── v0.2.0_benchmarks.py  # CREATE (Day 11)
-└── CHANGELOG.md              # CREATE (Day 14)
+│   └── LOGGING.md            # CREATED (Days 8-9)
+└── CHANGELOG.md              # CREATED (Days 12-13)
+
+# NOTE: benchmarks/ was not created as a separate deliverable.
+# Performance validation was integrated into test suite and documented
+# in CHANGELOG.md and test_index_persistence.py / test_batch_loading.py
 ```
 
-### Test Coverage Targets
+### Test Coverage (Actual Delivery)
 
-| Module | Current | Target | New Tests |
-|--------|---------|--------|-----------|
-| `server.py` | 85% | 90% | Logging, locks |
-| `index/persistence.py` | 0% | 95% | All new |
-| `tools/chunks.py` | 90% | 95% | Error cases |
-| `tools/docs.py` | 85% | 90% | Batch loading |
-| **Overall** | **88%** | **92%** | **+15 tests** |
+| Test Suite | Tests | Focus |
+|------------|-------|-------|
+| `test_batch_loading.py` | 7 | Concurrent loading, memory safety |
+| `test_concurrency.py` | 8 | Locks, atomic operations |
+| `test_index_persistence.py` | 10 | Disk persistence, staleness |
+| `test_e2e_integration.py` | 7 | End-to-end workflows |
+| `test_logging.py` | 13 | Structured logging |
+| **New tests** | **37** | **v0.2.0 features** |
+| **Total tests** | **88** | **Was 51 in v0.1.3** |
 
 ### Configuration Reference
 

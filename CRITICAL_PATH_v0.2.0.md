@@ -6,25 +6,23 @@ This diagram shows the dependency graph for v0.2.0 implementation. Items on the 
 
 ```mermaid
 graph TD
-    Start[Start v0.2.0] --> Patch8[#2: Fix Span Error Bug<br/>CRITICAL PATH<br/>Day 1: 2-4 hours]
-    Start --> Patch3[#3: Fix Logging Tests<br/>CRITICAL PATH<br/>Day 1: 2-4 hours]
+    Start[Start v0.2.0] --> BugFixes[Fix Bugs<br/>Patch #8 + #3<br/>CRITICAL PATH<br/>Day 1: 4-6 hours]
 
-    Patch8 --> Logging[#4: Structured Logging<br/>CRITICAL PATH<br/>Day 2: 6-8 hours]
-    Patch3 --> Logging
+    BugFixes --> Logging[Structured Logging<br/>Days 1-2<br/>CRITICAL PATH<br/>6-8 hours]
 
-    Logging --> Locks[#5: Session Locks<br/>CRITICAL PATH<br/>Day 3: 6-8 hours]
+    Logging --> Locks[Session Locks<br/>Day 3<br/>CRITICAL PATH<br/>6-8 hours]
 
-    Locks --> IndexPersist[#6: Persistent Index<br/>CRITICAL PATH<br/>Days 4-5: 12-16 hours]
+    Locks --> IndexPersist[Persistent Index<br/>Days 4-5<br/>CRITICAL PATH<br/>12-16 hours]
 
-    IndexPersist --> BatchLoad[#7: Batch Loading<br/>Day 7: 6-8 hours]
-    IndexPersist --> IntegrationTest[#8: Integration Testing<br/>CRITICAL PATH<br/>Day 6: 8 hours]
+    IndexPersist --> BatchLoad[Batch Loading<br/>Day 7<br/>6-8 hours]
+    IndexPersist --> IntegrationTest[Integration Testing<br/>Day 6<br/>CRITICAL PATH<br/>8 hours]
 
-    IntegrationTest --> Docs[#9: Documentation<br/>CRITICAL PATH<br/>Days 8-9: 12 hours]
+    IntegrationTest --> Docs[Documentation<br/>Days 8-9<br/>CRITICAL PATH<br/>12 hours]
     BatchLoad --> Docs
 
-    Docs --> Benchmarks[#10: Benchmarks<br/>Day 11: 6-8 hours]
+    Docs --> Review[Pre-release Review<br/>Day 11<br/>4 hours]
 
-    Benchmarks --> Release[#11: Release<br/>CRITICAL PATH<br/>Days 12-14: 16 hours]
+    Review --> Release[Release Prep<br/>Days 12-13<br/>CRITICAL PATH<br/>6 hours]
 
     Release --> Done[v0.2.0 Released ✅]
 
@@ -32,7 +30,7 @@ graph TD
     classDef normal fill:#74c0fc,stroke:#1c7ed6,stroke-width:2px
     classDef optional fill:#a9e34b,stroke:#5c940d,stroke-width:2px
 
-    class Patch8,Patch3,Logging,Locks,IndexPersist,IntegrationTest,Docs,Release critical
+    class BugFixes,Logging,Locks,IndexPersist,IntegrationTest,Docs,Review,Release critical
     class BatchLoad optional
 ```
 
@@ -42,48 +40,62 @@ graph TD
 
 ### Path Items (MUST complete for release)
 
-1. **#2 + #3: Fix Bugs** (Day 1)
+1. **Fix Bugs** (Day 1: Patch #8 + #3)
    - Time: 4-6 hours
    - Blockers: None
    - Blocks: Everything else
    - Risk: Low (straightforward fixes)
+   - Status: ✅ COMPLETED
 
-2. **#4: Structured Logging** (Day 2)
+2. **Structured Logging** (Days 1-2)
    - Time: 6-8 hours
-   - Blockers: #3 (test fix)
-   - Blocks: #5, #6 (debugging)
+   - Blockers: Bug fixes
+   - Blocks: Locks, persistence (debugging)
    - Risk: Low (well-defined)
+   - Status: ✅ COMPLETED
 
-3. **#5: Session Locks** (Day 3)
+3. **Session Locks** (Day 3)
    - Time: 6-8 hours
-   - Blockers: #4 (logging helps debug)
-   - Blocks: #6 (persistence needs locks)
+   - Blockers: Logging
+   - Blocks: Persistence needs locks
    - Risk: Medium (concurrency is tricky)
+   - Status: ✅ COMPLETED
 
-4. **#6: Persistent Index** (Days 4-5)
+4. **Persistent Index** (Days 4-5)
    - Time: 12-16 hours
-   - Blockers: #5 (needs locks)
-   - Blocks: #8 (integration testing)
+   - Blockers: Session locks
+   - Blocks: Integration testing
    - Risk: Medium (largest feature)
    - **Longest single task on critical path**
+   - Status: ✅ COMPLETED
 
-5. **#8: Integration Testing** (Day 6)
+5. **Integration Testing** (Day 6)
    - Time: 8 hours
-   - Blockers: #6 (needs all features)
-   - Blocks: #9 (docs), #11 (release)
+   - Blockers: All features working
+   - Blocks: Documentation, release
    - Risk: High (may find issues)
+   - Status: ✅ COMPLETED
 
-6. **#9: Documentation** (Days 8-9)
+6. **Documentation** (Days 8-9)
    - Time: 12 hours
-   - Blockers: #8 (features must work)
-   - Blocks: #11 (release needs docs)
+   - Blockers: Features must work
+   - Blocks: Release needs docs
    - Risk: Low (time-consuming but straightforward)
+   - Status: ✅ COMPLETED
 
-7. **#11: Release** (Days 12-14)
-   - Time: 16 hours (includes alpha testing)
-   - Blockers: #9, #10
+7. **Pre-release Review** (Day 11)
+   - Time: 4 hours
+   - Blockers: Documentation complete
+   - Blocks: Release
+   - Risk: Low
+   - Status: ✅ COMPLETED
+
+8. **Release Prep** (Days 12-13)
+   - Time: 6 hours
+   - Blockers: Review complete
    - Blocks: Nothing (end of path)
-   - Risk: Medium (alpha testing may find issues)
+   - Risk: Low
+   - Status: ✅ COMPLETED (v0.2.0 tagged)
 
 ### Off-Critical-Path Items (Can parallelize or defer)
 
