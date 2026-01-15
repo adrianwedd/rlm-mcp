@@ -144,6 +144,30 @@ class Database:
             await self.conn.commit()
             return row[0]
 
+    async def try_increment_tool_calls(
+        self, session_id: str, max_calls: int
+    ) -> tuple[bool, int]:
+        """Atomically check budget and increment if allowed."""
+        async with self.conn.execute(
+            """
+            UPDATE sessions
+            SET tool_calls_used = tool_calls_used + 1
+            WHERE id = ? AND tool_calls_used < ?
+            RETURNING tool_calls_used
+            """,
+            (session_id, max_calls),
+        ) as cursor:
+            row = await cursor.fetchone()
+            await self.conn.commit()
+
+            if row is None:
+                session = await self.get_session(session_id)
+                if session is None:
+                    raise ValueError(f"Session not found: {session_id}")
+                return (False, session.tool_calls_used)
+
+            return (True, row[0])
+
     def _row_to_session(self, row: aiosqlite.Row) -> Session:
         """Convert database row to Session model."""
         return Session(

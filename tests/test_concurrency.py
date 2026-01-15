@@ -253,3 +253,49 @@ async def test_increment_nonexistent_session_raises_error(server_with_session):
 
     with pytest.raises(ValueError, match="Session not found"):
         await server.db.increment_tool_calls("nonexistent-session-id")
+
+
+@pytest.mark.asyncio
+async def test_atomic_budget_enforcement_prevents_race(server_with_session):
+    """Test that try_increment_tool_calls prevents concurrent calls from exceeding budget."""
+    server, session_id = server_with_session
+
+    # Set budget to 100
+    max_calls = 100
+
+    # Check current count (fixture may have used some calls)
+    session = await server.db.get_session(session_id)
+    current_used = session.tool_calls_used
+
+    # Increment to 99 (one below limit)
+    remaining_to_99 = 99 - current_used
+    for _ in range(remaining_to_99):
+        await server.db.increment_tool_calls(session_id)
+
+    # Verify we're at 99
+    session = await server.db.get_session(session_id)
+    assert session.tool_calls_used == 99
+
+    # Race 10 concurrent calls at the boundary
+    # Only 1 should succeed (bringing count to 100), 9 should fail
+    async def try_call():
+        return await server.db.try_increment_tool_calls(session_id, max_calls)
+
+    results = await asyncio.gather(*[try_call() for _ in range(10)])
+
+    # Count successes and failures
+    successes = sum(1 for allowed, _ in results if allowed)
+    failures = sum(1 for allowed, _ in results if not allowed)
+
+    # Exactly 1 should succeed, 9 should fail
+    assert successes == 1, f"Expected 1 success, got {successes}"
+    assert failures == 9, f"Expected 9 failures, got {failures}"
+
+    # Final count should be exactly 100 (not 101, 102, etc.)
+    reloaded = await server.db.get_session(session_id)
+    assert reloaded.tool_calls_used == 100
+
+    # All subsequent calls should fail
+    allowed, used = await server.db.try_increment_tool_calls(session_id, max_calls)
+    assert not allowed
+    assert used == 100

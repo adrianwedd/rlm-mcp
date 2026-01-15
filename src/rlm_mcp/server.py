@@ -413,14 +413,17 @@ def tool_handler(operation: str):
                     if session is None:
                         raise ValueError(f"Session not found: {session_id}")
 
-                    # Then check budget
-                    allowed, used, remaining = await server.check_budget(session_id)
+                    # Atomic budget check and increment (race-condition safe)
+                    max_calls = session.config.max_tool_calls
+                    allowed, used = await server.db.try_increment_tool_calls(
+                        session_id, max_calls
+                    )
                     if not allowed:
+                        remaining = max_calls - used
                         raise ValueError(
                             f"Tool call budget exceeded: {used} calls used, "
                             f"{remaining} remaining. Close session or increase max_tool_calls."
                         )
-                    await server.increment_budget(session_id)
 
                 # Execute handler
                 result = await func(server, **kwargs)
