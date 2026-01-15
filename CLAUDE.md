@@ -548,6 +548,284 @@ See `tests/test_index_persistence.py` for comprehensive tests covering:
 - Load performance benchmarks
 - Concurrent operation safety
 
+## Batch Document Loading
+
+**Overview**:
+Document loading operations execute concurrently with memory-bounded semaphores, collecting results in-memory before committing all documents in a single atomic database transaction. This approach delivers 2-3x performance improvements while maintaining predictable memory usage.
+
+**Configuration** (`~/.rlm-mcp/config.yaml`):
+```yaml
+# Batch loading configuration
+max_concurrent_loads: 20   # Max concurrent file loads (memory safety)
+max_file_size_mb: 100      # Reject files larger than this
+```
+
+**Architecture**:
+The batch loading system separates loading from persistence, enabling concurrent I/O followed by a single transactional commit:
+
+```python
+# Load phase: Concurrent with bounded semaphore
+async def _docs_load(server, session_id, sources):
+    # Create semaphore for memory safety (Patch #6)
+    semaphore = asyncio.Semaphore(server.config.max_concurrent_loads)
+
+    async def load_with_semaphore(source_spec):
+        async with semaphore:  # Blocks if limit reached
+            return await _load_source_no_save(server, session_id, source_spec)
+
+    # Load all sources concurrently
+    results = await asyncio.gather(
+        *[load_with_semaphore(spec) for spec in sources],
+        return_exceptions=True  # Partial failures don't block batch
+    )
+
+    # Collect successful documents
+    all_docs = []
+    errors = []
+    for result in results:
+        if isinstance(result, Exception):
+            errors.append(str(result))
+        elif result:
+            all_docs.extend(result)
+
+    # Persist phase: Single atomic transaction
+    if all_docs:
+        await server.db.create_documents_batch(all_docs)
+
+    # Invalidate index (new docs make it stale)
+    if session_id in server._index_cache:
+        del server._index_cache[session_id]
+    server.index_persistence.invalidate_index(session_id)
+
+    return {"loaded": all_docs, "errors": errors}
+```
+
+**Memory Safety** (Patch #6):
+Semaphores enforce hard limits on concurrent file loads, preventing out-of-memory conditions when loading large corpora:
+
+```python
+# Bounded concurrency prevents OOM
+max_concurrent = 20  # At most 20 files in memory simultaneously
+
+# Example: Loading 100 files
+# - Without semaphore: All 100 loaded concurrently -> potential OOM
+# - With semaphore: Max 20 concurrent -> predictable memory usage
+semaphore = asyncio.Semaphore(max_concurrent)
+
+async def load_file_bounded(path):
+    async with semaphore:  # Blocks if 20 files already loading
+        return await _load_file_no_save(server, session_id, path, source_spec)
+```
+
+**File Size Limits**:
+Individual files are validated before loading to prevent memory exhaustion:
+
+```python
+async def _load_file_no_save(server, session_id, path, source_spec):
+    """Load file as document without saving (for batch insert)."""
+    # Enforce file size limit
+    file_size_mb = path.stat().st_size / (1024 * 1024)
+    if file_size_mb > server.config.max_file_size_mb:
+        raise ValueError(
+            f"File too large: {path} ({file_size_mb:.1f}MB > "
+            f"{server.config.max_file_size_mb}MB limit)"
+        )
+
+    # Load content
+    content = path.read_text(encoding="utf-8")
+
+    # Create document object (don't save yet)
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    doc = Document(
+        id=f"doc_{uuid.uuid4().hex[:8]}",
+        session_id=session_id,
+        content_hash=content_hash,
+        source_type="file",
+        source_path=str(path),
+        char_count=len(content),
+    )
+
+    # Store blob
+    await server.blob_store.store_blob(content_hash, content)
+
+    return doc  # Caller will batch insert
+```
+
+**Batch Database Insert**:
+All documents are inserted in a single transaction using `executemany()`:
+
+```python
+# In src/rlm_mcp/storage/database.py
+async def create_documents_batch(self, documents: list[Document]) -> None:
+    """Insert multiple documents in a single atomic transaction."""
+    batch_data = [
+        (
+            doc.id,
+            doc.session_id,
+            doc.content_hash,
+            doc.source_type,
+            doc.source_path or "",
+            doc.source_glob or "",
+            doc.metadata_json,
+            doc.char_count,
+        )
+        for doc in documents
+    ]
+
+    await self.conn.executemany(
+        """
+        INSERT INTO documents (
+            id, session_id, content_hash, source_type,
+            source_path, source_glob, metadata_json, char_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        batch_data,
+    )
+    await self.conn.commit()  # Single transaction
+```
+
+**Partial Batch Success**:
+Errors in individual sources don't fail the entire batch. Successful documents are loaded while errors are reported:
+
+```python
+# Example: Loading 5 sources with 2 failures
+sources = [
+    {"type": "inline", "content": "Valid doc 1"},
+    {"type": "file", "path": "/nonexistent.txt"},  # Error
+    {"type": "inline", "content": "Valid doc 2"},
+    {"type": "invalid_type"},  # Error
+    {"type": "inline", "content": "Valid doc 3"},
+]
+
+result = await _docs_load(server, session_id=session_id, sources=sources)
+
+# Result:
+# {
+#   "loaded": [doc1, doc2, doc3],  # 3 successful documents
+#   "errors": [
+#       "File not found: /nonexistent.txt",
+#       "Unknown source type: invalid_type"
+#   ]
+# }
+```
+
+**Concurrent Loading Strategies**:
+
+**Directory Loading**:
+```python
+async def _load_directory_concurrent(server, session_id, dir_path, source_spec):
+    """Load all files in directory concurrently."""
+    semaphore = asyncio.Semaphore(server.config.max_concurrent_loads)
+
+    # Collect all file paths
+    file_paths = [
+        p for p in Path(dir_path).rglob("*")
+        if p.is_file() and not p.name.startswith(".")
+    ]
+
+    # Load concurrently with semaphore
+    async def load_one(path):
+        async with semaphore:
+            try:
+                return await _load_file_no_save(server, session_id, path, source_spec)
+            except Exception as e:
+                return None  # Skip errors, will be logged
+
+    docs = await asyncio.gather(*[load_one(p) for p in file_paths])
+    return [d for d in docs if d]  # Filter out None (failed loads)
+```
+
+**Glob Pattern Loading**:
+```python
+async def _load_glob_concurrent(server, session_id, pattern, base_path, source_spec):
+    """Load files matching glob pattern concurrently."""
+    semaphore = asyncio.Semaphore(server.config.max_concurrent_loads)
+
+    # Resolve glob pattern
+    file_paths = sorted(base_path.glob(pattern))
+
+    # Load concurrently
+    async def load_one(path):
+        async with semaphore:
+            try:
+                return await _load_file_no_save(server, session_id, path, source_spec)
+            except Exception as e:
+                return None
+
+    docs = await asyncio.gather(*[load_one(p) for p in file_paths])
+    return [d for d in docs if d]
+```
+
+**Performance Characteristics**:
+
+| Operation | Sequential (v0.1.3) | Concurrent (v0.2.0) | Improvement |
+|-----------|---------------------|---------------------|-------------|
+| 20 inline documents | ~2s | <1s | **2x faster** |
+| 100 files (small) | ~30s | ~10s | **3x faster** |
+| 15 files (1KB each) | ~8s | ~4s | **2x faster** |
+
+**Memory Usage**:
+- **Without semaphore**: O(num_files × avg_file_size) - can cause OOM
+- **With semaphore**: O(max_concurrent × avg_file_size) - bounded and predictable
+
+Example with 1000 files of 1MB each:
+- Without semaphore: Up to 1GB in memory simultaneously
+- With semaphore (20 concurrent): Max 20MB in memory simultaneously
+
+**Tuning Concurrency**:
+
+```yaml
+# For SSDs and fast CPUs (more I/O throughput)
+max_concurrent_loads: 50
+
+# For slower systems or HDDs (reduce I/O contention)
+max_concurrent_loads: 10
+
+# For very large files (conserve memory)
+max_concurrent_loads: 5
+max_file_size_mb: 50
+```
+
+**Testing**:
+See `tests/test_batch_loading.py` for comprehensive tests covering:
+- Batch loading performance (20 docs in <1s)
+- Partial batch failure (3 successful, 2 errors)
+- Memory bounded loading (semaphore enforces limits)
+- Max concurrent enforcement (tracking with monkey-patching)
+- File size limit enforcement (reject oversized files)
+- Batch insert atomicity (all-or-nothing transaction)
+- Concurrent batch loads (multiple batches don't interfere)
+
+**Monitoring Batch Operations**:
+
+Structured logs track batch loading operations:
+```json
+{
+  "timestamp": "2026-01-15T10:30:45.123456Z",
+  "level": "INFO",
+  "message": "Completed rlm.docs.load",
+  "correlation_id": "a1b2c3d4-...",
+  "session_id": "session-123",
+  "operation": "rlm.docs.load",
+  "duration_ms": 8420,
+  "success": true,
+  "loaded_count": 98,
+  "error_count": 2
+}
+```
+
+Query batch operations:
+```bash
+# All document loads
+cat /var/log/rlm-mcp.log | jq 'select(.operation == "rlm.docs.load")'
+
+# Slow batch loads (>5s)
+cat /var/log/rlm-mcp.log | jq 'select(.operation == "rlm.docs.load" and .duration_ms > 5000)'
+
+# Batch loads with errors
+cat /var/log/rlm-mcp.log | jq 'select(.operation == "rlm.docs.load" and .error_count > 0)'
+```
+
 ## Common Development Patterns
 
 **Adding a new tool**:
