@@ -8,6 +8,12 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from rlm_mcp.models import ChunkStrategy, Span, SpanRef
 from rlm_mcp.server import tool_handler
+from rlm_mcp.errors import (
+    SessionNotFoundError,
+    DocumentNotFoundError,
+    SpanNotFoundError,
+    ContentNotFoundError,
+)
 
 if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
@@ -256,6 +262,7 @@ async def _chunk_create(
             end_offset=end,
             content_hash=content_hash,
             strategy=strategy_obj,
+            chunk_index=i,  # Store index for better error messages
         )
         await server.db.create_span(span)
         
@@ -289,28 +296,49 @@ async def _span_get(
     """Get span contents with provenance."""
     session = await server.db.get_session(session_id)
     if session is None:
-        raise ValueError(f"Session not found: {session_id}")
-    
+        raise SessionNotFoundError(session_id)
+
     max_chars = server.get_char_limit(session, "response")
     total_chars = 0
     spans_output = []
-    
+
     for span_id in span_ids:
         span = await server.db.get_span(span_id)
         if span is None:
-            raise ValueError(f"Span not found: {span_id}")
-        
+            # Can't get document name since span is None
+            raise SpanNotFoundError(
+                span_id=span_id,
+                session_id=session_id,
+                hint="This chunk may have been deleted or never created. "
+                     "Check that you're using the correct span_id from chunk.create results."
+            )
+
         # Get document to verify session and get content_hash
         doc = await server.db.get_document(span.document_id)
-        if doc is None or doc.session_id != session_id:
-            raise ValueError(f"Span {span_id} not in session {session_id}")
-        
+        if doc is None:
+            raise DocumentNotFoundError(
+                doc_id=span.document_id,
+                session_id=session_id,
+                context=f"referenced by span {span_id}"
+            )
+
+        if doc.session_id != session_id:
+            raise ValueError(
+                f"Span '{span_id}' belongs to session '{doc.session_id}', "
+                f"not '{session_id}'. Spans cannot be accessed across sessions."
+            )
+
         # Get content
         content = server.blobs.get_slice(
             doc.content_hash, span.start_offset, span.end_offset
         )
         if content is None:
-            raise ValueError(f"Content not found for span: {span_id}")
+            # Now we have document name for better error message
+            chunk_desc = f"chunk #{span.chunk_index}" if span.chunk_index is not None else "chunk"
+            raise ContentNotFoundError(
+                content_hash=doc.content_hash,
+                context_msg=f"{chunk_desc} in document '{doc.name}' (span {span_id})"
+            )
         
         # Check if we'd exceed total char limit
         remaining = max_chars - total_chars

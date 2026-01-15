@@ -3,7 +3,15 @@
     "allow": [
       "Bash(uv sync:*)",
       "Bash(uv run pytest:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "mcp__rlm-mcp__rlm_chunk_create",
+      "mcp__rlm-mcp__rlm_artifact_store",
+      "mcp__rlm-mcp__rlm_session_info",
+      "mcp__rlm-mcp__rlm_artifact_list",
+      "Bash(tee:*)",
+      "mcp__rlm-mcp__rlm_search_query",
+      "mcp__rlm-mcp__rlm_span_get",
+      "mcp__rlm-mcp__rlm_artifact_get"
     ]
   }
 }

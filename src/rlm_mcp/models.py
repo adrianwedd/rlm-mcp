@@ -113,9 +113,10 @@ class SpanRef(BaseModel):
 
 class Span(BaseModel):
     """Document span (chunk) with provenance.
-    
+
     - id (span_id): Session-scoped stable identifier
     - content_hash: Hash of span content for integrity/dedup
+    - chunk_index: Position in chunking sequence (0-based) for user-friendly errors
     """
     id: str = Field(default_factory=generate_id)
     document_id: str
@@ -123,6 +124,7 @@ class Span(BaseModel):
     end_offset: int
     content_hash: str
     strategy: ChunkStrategy
+    chunk_index: int | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     def to_ref(self, doc_id: str) -> SpanRef:
