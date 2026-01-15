@@ -206,6 +206,25 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+    async def get_document_fingerprints(self, session_id: str) -> list[dict[str, str]]:
+        """Get document IDs and content hashes for fingerprinting.
+
+        Returns minimal data needed for index fingerprinting.
+        More efficient than loading full Document objects.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            List of dicts with 'id' and 'content_hash' keys
+        """
+        async with self.conn.execute(
+            "SELECT id, content_hash FROM documents WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [{"id": row[0], "content_hash": row[1]} for row in rows]
     
     async def get_session_stats(self, session_id: str) -> dict[str, int]:
         """Get aggregate stats for session."""

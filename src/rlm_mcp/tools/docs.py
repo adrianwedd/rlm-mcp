@@ -72,10 +72,14 @@ async def _docs_load(
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
     
-    # Invalidate BM25 index cache (new docs make it stale)
+    # Invalidate BM25 index (new docs make it stale)
+    # 1. Invalidate in-memory cache
     if session_id in server._index_cache:
         del server._index_cache[session_id]
-    
+
+    # 2. Invalidate persisted index on disk
+    server.index_persistence.invalidate_index(session_id)
+
     loaded = []
     errors = []
     total_chars = 0

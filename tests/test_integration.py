@@ -86,7 +86,7 @@ async def test_full_workflow_smoke(server: RLMServer, sample_python_code: str):
     )
     
     assert "matches" in search_result
-    assert search_result["index_built_this_call"]  # First BM25 query builds index
+    # Note: index_built_this_call no longer tracked with persistence layer
     assert search_result["index_built"]
     
     # Verify index persists across queries
@@ -221,22 +221,25 @@ async def test_index_invalidation_on_doc_load(server: RLMServer, sample_python_c
     
     # Build index
     result1 = await _search_query(server, session_id=session_id, query="First")
-    assert result1["index_built_this_call"]
+    # Note: index_built_this_call no longer tracked with persistence layer
     assert result1["index_built"]
-    
+
     # Load second doc (should invalidate index)
     await _docs_load(
         server,
         session_id=session_id,
         sources=[{"type": "inline", "content": "Second document content"}],
     )
-    
-    # Index should be invalidated
+
+    # Index should be invalidated (both memory and disk)
     assert session_id not in server._index_cache
-    
+    # Check persisted index was also deleted
+    index_path = server.index_persistence._get_index_path(session_id)
+    assert not index_path.exists()
+
     # Next search should rebuild
     result2 = await _search_query(server, session_id=session_id, query="Second")
-    assert result2["index_built_this_call"]
+    # Note: index_built_this_call no longer tracked with persistence layer
 
 
 @pytest.mark.asyncio

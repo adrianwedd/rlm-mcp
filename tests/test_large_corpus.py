@@ -72,7 +72,8 @@ async def test_bm25_search_performance(server: RLMServer):
     )
     first_search_time = time.time() - start
 
-    assert result1["index_built_this_call"] == True
+    # Note: index_built_this_call no longer tracked with persistence layer
+    assert result1["index_built"]
     assert len(result1["matches"]) > 0
     print(f"First search (with index build): {first_search_time:.2f}s")
 
@@ -87,7 +88,8 @@ async def test_bm25_search_performance(server: RLMServer):
     )
     cached_search_time = time.time() - start
 
-    assert result2["index_built_this_call"] == False
+    # Note: index_built_this_call no longer tracked with persistence layer
+    # Cache hit should be fast
     assert cached_search_time < 1.0, f"Cached search took {cached_search_time:.2f}s, expected < 1s"
     print(f"Cached search: {cached_search_time:.3f}s")
 

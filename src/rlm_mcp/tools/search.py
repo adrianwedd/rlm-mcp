@@ -141,75 +141,49 @@ async def _bm25_search(
     limit: int,
     context_chars: int,
 ) -> tuple[list[SearchMatch], bool]:
-    """BM25 search with lazy index building."""
-    from rank_bm25 import BM25Okapi
-    
-    index_built_this_call = False
-    
-    # Check cache
-    if session_id not in server._index_cache:
-        # Build index
-        corpus = []
-        doc_map = []  # (doc_id, content)
-        
-        for doc in docs:
-            content = server.blobs.get(doc.content_hash)
-            if content:
-                tokens = _tokenize(content)
-                corpus.append(tokens)
-                doc_map.append((doc.id, content))
-        
-        if corpus:
-            bm25 = BM25Okapi(corpus)
-            server._index_cache[session_id] = {
-                "bm25": bm25,
-                "doc_map": doc_map,
-            }
-            index_built_this_call = True
-    
-    cache = server._index_cache.get(session_id)
-    if not cache:
-        return [], index_built_this_call
-    
-    bm25 = cache["bm25"]
-    doc_map = cache["doc_map"]
-    
-    # Search
-    query_tokens = _tokenize(query)
-    scores = bm25.get_scores(query_tokens)
-    
-    # Get top results
-    scored_docs = list(zip(range(len(scores)), scores))
-    scored_docs.sort(key=lambda x: x[1], reverse=True)
-    
+    """BM25 search with persistent index.
+
+    Uses server.get_or_build_index() which:
+    1. Checks in-memory cache
+    2. Tries loading from disk (with staleness check)
+    3. Builds from scratch if needed
+    """
+    # Get or build index (handles persistence)
+    index = await server.get_or_build_index(session_id)
+
+    # Search using BM25Index
+    from rlm_mcp.index.bm25 import ScoredDocument
+
+    scored_results = index.search(query, limit=limit)
+
+    # Convert to SearchMatch format
     matches = []
-    for idx, score in scored_docs[:limit]:
-        # Note: BM25 scores can be negative, so don't filter them out
-        doc_id, content = doc_map[idx]
-        
+    for result in scored_results:
         # Find best match position for context
-        match_pos = _find_best_match_position(content, query)
-        
+        match_pos = _find_best_match_position(result.content, query)
+
         # Extract context
         start = max(0, match_pos - context_chars // 2)
-        end = min(len(content), match_pos + context_chars // 2)
-        context = content[start:end]
-        
+        end = min(len(result.content), match_pos + context_chars // 2)
+        context = result.content[start:end]
+
         # Highlight position within context
         highlight_start = match_pos - start
         highlight_end = min(highlight_start + len(query), len(context))
-        
+
         matches.append(SearchMatch(
-            doc_id=doc_id,
-            span=SpanRef(doc_id=doc_id, start=start, end=end),
+            doc_id=result.doc_id,
+            span=SpanRef(doc_id=result.doc_id, start=start, end=end),
             span_id=None,
-            score=float(score),
+            score=result.score,
             context=context,
             highlight_start=highlight_start,
             highlight_end=highlight_end,
         ))
-    
-    return matches, index_built_this_call
+
+    # Note: index_built_this_call is no longer tracked since get_or_build_index
+    # handles all caching/persistence logic internally
+    return matches, False
 
 
 async def _regex_search(

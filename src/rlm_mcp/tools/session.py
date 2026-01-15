@@ -9,9 +9,12 @@ from mcp.types import Tool, TextContent
 
 from rlm_mcp.models import Session, SessionConfig, SessionStatus, SessionSummary
 from rlm_mcp.server import tool_handler
+from rlm_mcp.logging_config import StructuredLogger
 
 if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
+
+logger = StructuredLogger(__name__)
 
 
 def register_session_tools(server: "RLMServer") -> None:
@@ -133,8 +136,38 @@ async def _session_close(
         span_count = await server.db.count_spans(session_id)
         artifact_count = await server.db.count_artifacts(session_id)
 
-        # Clean up index cache
+        # Persist index to disk before cleanup (if it exists in cache)
         if session_id in server._index_cache:
+            try:
+                index = server._index_cache[session_id]
+
+                # Compute metadata for persistence
+                doc_fingerprints = await server.db.get_document_fingerprints(session_id)
+                doc_fingerprint = server.index_persistence.compute_doc_fingerprint(
+                    doc_fingerprints
+                )
+                tokenizer_name = server.index_persistence.get_tokenizer_name()
+
+                from rlm_mcp.index.persistence import IndexMetadata
+
+                metadata = IndexMetadata(
+                    doc_count=doc_count,
+                    doc_fingerprint=doc_fingerprint,
+                    tokenizer_name=tokenizer_name,
+                )
+
+                # Save index (atomic write)
+                server.index_persistence.save_index(session_id, index, metadata)
+
+            except Exception as e:
+                # Log but don't fail session close if persistence fails
+                logger.warning(
+                    f"Failed to persist index for session {session_id}: {e}",
+                    session_id=session_id,
+                    error=str(e),
+                )
+
+            # Clean up from memory cache
             del server._index_cache[session_id]
 
         result = {

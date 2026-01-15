@@ -23,6 +23,7 @@ from rlm_mcp.config import ServerConfig, ensure_directories, load_config
 from rlm_mcp.models import Session, TraceEntry
 from rlm_mcp.storage import BlobStore, Database
 from rlm_mcp.logging_config import StructuredLogger, correlation_id_var, configure_logging
+from rlm_mcp.index.persistence import IndexPersistence, IndexMetadata
 
 import logging
 
@@ -109,6 +110,9 @@ class RLMServer:
         # Session index cache (lazy-built BM25 indexes)
         self._index_cache: dict[str, Any] = {}
 
+        # Index persistence layer (atomic writes + fingerprinting)
+        self.index_persistence = IndexPersistence(self.config.index_dir)
+
         # Per-session concurrency locks (single-process only)
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._lock_manager_lock: asyncio.Lock = asyncio.Lock()
@@ -190,6 +194,114 @@ class RLMServer:
         """
         async with self._lock_manager_lock:
             self._session_locks.pop(session_id, None)
+
+    # --- Index Persistence ---
+
+    async def get_or_build_index(self, session_id: str) -> Any:
+        """Get cached index or build from scratch.
+
+        Check strategy (with session lock):
+        1. Check in-memory cache -> return if present
+        2. Try loading from disk -> validate staleness
+        3. Build from scratch if needed -> cache in memory
+
+        Uses session lock to prevent concurrent builds.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            BM25Index instance
+        """
+        # Acquire session lock to prevent concurrent builds
+        lock = await self.get_session_lock(session_id)
+        async with lock:
+            # 1. Check in-memory cache first (fastest)
+            if session_id in self._index_cache:
+                logger.debug(
+                    "Index cache hit (memory)",
+                    session_id=session_id,
+                )
+                return self._index_cache[session_id]
+
+            # 2. Try loading from disk
+            index, metadata = self.index_persistence.load_index(session_id)
+
+            if index is not None and metadata is not None:
+                # Validate staleness using fingerprinting
+                doc_count = await self.db.count_documents(session_id)
+                doc_fingerprints = await self.db.get_document_fingerprints(session_id)
+                doc_fingerprint = self.index_persistence.compute_doc_fingerprint(
+                    doc_fingerprints
+                )
+                tokenizer_name = self.index_persistence.get_tokenizer_name()
+
+                is_stale = self.index_persistence.is_index_stale(
+                    metadata, doc_count, doc_fingerprint, tokenizer_name
+                )
+
+                if not is_stale:
+                    # Index is fresh, cache and return
+                    logger.info(
+                        "Index cache hit (disk)",
+                        session_id=session_id,
+                        doc_count=doc_count,
+                    )
+                    self._index_cache[session_id] = index
+                    return index
+
+                logger.info(
+                    "Index stale, rebuilding",
+                    session_id=session_id,
+                    reason="fingerprint_mismatch",
+                )
+
+            # 3. Build from scratch
+            logger.info(
+                "Building index from scratch",
+                session_id=session_id,
+            )
+
+            # Get all documents for session
+            from rlm_mcp.index.bm25 import BM25Index
+
+            documents = await self.db.get_documents(session_id, limit=100000)
+
+            # Build index
+            index = BM25Index()
+            for doc in documents:
+                content = self.blobs.get(doc.content_hash)
+                if content:
+                    index.add_document(doc.id, content)
+
+            # Build the BM25 index
+            index.build()
+
+            # Cache in memory
+            self._index_cache[session_id] = index
+
+            logger.info(
+                "Index built successfully",
+                session_id=session_id,
+                doc_count=len(documents),
+            )
+
+            return index
+
+    async def cache_index(self, session_id: str, index: Any) -> None:
+        """Cache index in memory.
+
+        Args:
+            session_id: Session identifier
+            index: BM25Index instance to cache
+        """
+        lock = await self.get_session_lock(session_id)
+        async with lock:
+            self._index_cache[session_id] = index
+            logger.debug(
+                "Cached index in memory",
+                session_id=session_id,
+            )
 
     # --- Middleware ---
     
