@@ -373,6 +373,181 @@ async def test_concurrent_budget_increments():
 
 See `tests/test_concurrency.py` for comprehensive concurrency tests.
 
+## Index Persistence
+
+**Overview**:
+BM25 indexes are persisted to disk using atomic writes and fingerprinting to survive server restarts. Indexes are automatically saved on session close and loaded on-demand with staleness detection.
+
+**Infrastructure** (`src/rlm_mcp/index/persistence.py`):
+- `IndexPersistence`: Handles atomic writes, loading, and staleness detection
+- `IndexMetadata`: Tracks doc_count, doc_fingerprint, tokenizer_name for staleness checks
+- `BM25Index`: Picklable wrapper around rank-bm25's BM25Okapi
+
+**3-Tier Cache Strategy**:
+```python
+async def get_or_build_index(self, session_id: str) -> BM25Index:
+    """Get cached index or build from scratch.
+
+    1. Check in-memory cache -> return if present (fastest)
+    2. Try loading from disk -> validate staleness -> cache if fresh
+    3. Build from scratch -> cache in memory
+    """
+    lock = await self.get_session_lock(session_id)
+    async with lock:
+        # 1. Memory cache hit (fastest path)
+        if session_id in self._index_cache:
+            return self._index_cache[session_id]
+
+        # 2. Disk cache hit (with staleness check)
+        index, metadata = self.index_persistence.load_index(session_id)
+        if index and not self.index_persistence.is_index_stale(metadata, ...):
+            self._index_cache[session_id] = index
+            return index
+
+        # 3. Build from scratch
+        index = BM25Index()
+        # ... build index from documents ...
+        self._index_cache[session_id] = index
+        return index
+```
+
+**Atomic Writes** (Patch #1):
+Prevents corruption from crashes during write by using temp files and atomic rename:
+```python
+def save_index(self, session_id: str, index: BM25Index, metadata: IndexMetadata):
+    """Save index with atomic write to prevent corruption."""
+    # Write to temp files first
+    index_tmp = index_path.with_suffix(".pkl.tmp")
+    metadata_tmp = metadata_path.with_suffix(".pkl.tmp")
+
+    with open(index_tmp, "wb") as f:
+        pickle.dump(index, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with open(metadata_tmp, "wb") as f:
+        pickle.dump(metadata, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # Atomic rename (crash-safe on POSIX systems)
+    os.replace(index_tmp, index_path)
+    os.replace(metadata_tmp, metadata_path)
+```
+
+**Fingerprinting** (Staleness Detection):
+Indexes are invalidated when any of these change:
+1. **Document count**: New docs added or docs removed
+2. **Document fingerprint**: SHA256 of sorted content hashes (detects edits)
+3. **Tokenizer name**: Algorithm version changed
+
+```python
+def compute_doc_fingerprint(self, documents: list[dict]) -> str:
+    """Compute SHA256 fingerprint from sorted content hashes."""
+    sorted_docs = sorted(documents, key=lambda d: d["id"])
+    fingerprint_input = "".join(d["content_hash"] for d in sorted_docs)
+    return hashlib.sha256(fingerprint_input.encode()).hexdigest()
+
+def is_index_stale(
+    self,
+    metadata: IndexMetadata,
+    current_doc_count: int,
+    current_doc_fingerprint: str,
+    current_tokenizer: str
+) -> bool:
+    """Check if persisted index is stale."""
+    return (
+        metadata.doc_count != current_doc_count or
+        metadata.doc_fingerprint != current_doc_fingerprint or
+        metadata.tokenizer_name != current_tokenizer
+    )
+```
+
+**Corruption Recovery**:
+Gracefully handles corrupted pickle files by rebuilding:
+```python
+def load_index(self, session_id: str) -> tuple[BM25Index, IndexMetadata] | tuple[None, None]:
+    """Load index with corruption handling."""
+    try:
+        with open(metadata_path, "rb") as f:
+            metadata = pickle.load(f)
+        with open(index_path, "rb") as f:
+            index = pickle.load(f)
+        return index, metadata
+    except (pickle.UnpicklingError, EOFError, OSError) as e:
+        logger.warning(f"Corrupted index detected: {e}. Will rebuild.")
+        self.invalidate_index(session_id)  # Clean up corrupted files
+        return None, None
+```
+
+**Invalidation on Document Changes**:
+Loading new documents invalidates both memory and disk caches:
+```python
+# In _docs_load (src/rlm_mcp/tools/docs.py)
+async def _docs_load(server, session_id, sources):
+    # ... load documents ...
+
+    # Invalidate BM25 index (new docs make it stale)
+    if session_id in server._index_cache:
+        del server._index_cache[session_id]  # 1. Clear memory
+    server.index_persistence.invalidate_index(session_id)  # 2. Delete disk files
+```
+
+**Persistence on Session Close**:
+Indexes are automatically saved when closing a session:
+```python
+# In _session_close (src/rlm_mcp/tools/session.py)
+async def _session_close(server, session_id):
+    lock = await server.get_session_lock(session_id)
+    async with lock:
+        # ... update session status ...
+
+        # Persist index to disk if present
+        if session_id in server._index_cache:
+            try:
+                index = server._index_cache[session_id]
+
+                # Compute metadata for staleness checking
+                doc_fingerprints = await server.db.get_document_fingerprints(session_id)
+                doc_fingerprint = server.index_persistence.compute_doc_fingerprint(doc_fingerprints)
+                tokenizer_name = server.index_persistence.get_tokenizer_name()
+
+                metadata = IndexMetadata(
+                    doc_count=doc_count,
+                    doc_fingerprint=doc_fingerprint,
+                    tokenizer_name=tokenizer_name,
+                )
+
+                # Save with atomic write
+                server.index_persistence.save_index(session_id, index, metadata)
+            except Exception as e:
+                logger.warning(f"Failed to persist index: {e}")  # Log but don't fail close
+
+            del server._index_cache[session_id]
+```
+
+**Storage Layout**:
+```
+~/.rlm-mcp/
+└── indexes/
+    └── {session_id}/
+        ├── index.pkl      # Pickled BM25Index object
+        └── metadata.pkl   # IndexMetadata (doc_count, fingerprint, tokenizer)
+```
+
+**Performance Characteristics**:
+- **Memory cache hit**: ~0ms (instant return)
+- **Disk cache hit**: <100ms (pickle load + fingerprint validation)
+- **Index rebuild**: Varies by corpus size (typically <1s for 500K chars)
+
+**Testing**:
+See `tests/test_index_persistence.py` for comprehensive tests covering:
+- Persistence on session close
+- Loading across server restarts
+- Invalidation on document changes
+- Atomic write verification (no .tmp files left)
+- Tokenizer change detection
+- Document edit detection (fingerprinting)
+- Corruption recovery
+- Fingerprint computation correctness
+- Load performance benchmarks
+- Concurrent operation safety
+
 ## Common Development Patterns
 
 **Adding a new tool**:
