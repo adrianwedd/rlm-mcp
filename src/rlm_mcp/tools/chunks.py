@@ -336,9 +336,10 @@ async def _span_get(
         if content is None:
             # Now we have document name for better error message
             chunk_desc = f"chunk #{span.chunk_index}" if span.chunk_index is not None else "chunk"
+            doc_name = doc.metadata.get("name", doc.id) if doc.metadata else doc.id
             raise ContentNotFoundError(
                 content_hash=doc.content_hash,
-                context_msg=f"{chunk_desc} in document '{doc.name}' (span {span_id})"
+                context_msg=f"{chunk_desc} in document '{doc_name}' (span {span_id})"
             )
 
         # Check if we'd exceed total char limit
