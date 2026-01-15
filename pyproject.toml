@@ -1,6 +1,6 @@
 [project]
 name = "rlm-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Recursive Language Model MCP Server for Claude Code"
 readme = "README.md"
 license = {text = "MIT"}
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["mcp", "llm", "context", "recursive", "claude"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
