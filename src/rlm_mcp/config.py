@@ -28,6 +28,11 @@ class ServerConfig(BaseModel):
     # Tool naming: strict by default (fail if SDK doesn't support canonical names)
     # Set to True only for experimentation with older SDKs
     allow_noncanonical_tool_names: bool = False
+
+    # Logging configuration
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
+    structured_logging: bool = True  # JSON format vs human-readable
+    log_file: str | None = None  # Optional file path for logs
     
     def model_post_init(self, __context: Any) -> None:
         """Set derived paths after initialization."""

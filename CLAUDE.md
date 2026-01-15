@@ -137,6 +137,11 @@ default_max_tool_calls: 500
 default_max_chars_per_response: 50000
 default_max_chars_per_peek: 10000
 allow_noncanonical_tool_names: false  # Strict mode (default)
+
+# Logging configuration
+log_level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+structured_logging: true       # JSON format (true) vs human-readable (false)
+log_file: null                 # Optional file path for logs (null = console only)
 ```
 
 **Tool naming modes**:
@@ -180,6 +185,106 @@ To enable server logging:
 import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
+
+## Structured Logging
+
+**Infrastructure** (`src/rlm_mcp/logging_config.py`):
+- `StructuredFormatter`: JSON formatter for production observability
+- `StructuredLogger`: Helper class for logging with context fields
+- `correlation_id_var`: Context variable for tracking operations across async calls
+- `configure_logging()`: One-time setup called in `run_server()`
+
+**Configuration** (`~/.rlm-mcp/config.yaml`):
+```yaml
+log_level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+structured_logging: true       # JSON format (true) vs human-readable (false)
+log_file: "/var/log/rlm.log"  # Optional file output (null = console only)
+```
+
+**JSON Log Format**:
+```json
+{
+  "timestamp": "2026-01-15T10:30:45.123456Z",
+  "level": "INFO",
+  "logger": "rlm_mcp.server",
+  "message": "Completed rlm.session.create",
+  "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "session_id": "session-123",
+  "operation": "rlm.session.create",
+  "duration_ms": 42,
+  "success": true
+}
+```
+
+**Correlation IDs**:
+- Every tool call gets a unique correlation_id (UUID)
+- Set via `correlation_id_var.set(correlation_id)` in `tool_handler()` decorator
+- Automatically included in all logs during that operation
+- Always cleared in `finally` block to prevent leaks across operations
+- Enables tracing related operations in production logs
+
+**Usage in Code**:
+```python
+from rlm_mcp.logging_config import StructuredLogger
+
+logger = StructuredLogger(__name__)
+
+# Basic logging
+logger.info("Operation completed")
+
+# With context fields
+logger.info(
+    "Search completed",
+    session_id="session-123",
+    operation="rlm.search.query",
+    duration_ms=150,
+    result_count=5
+)
+
+# Error logging
+logger.error(
+    "Operation failed",
+    session_id="session-123",
+    operation="rlm.chunk.create",
+    error=str(e),
+    error_type=type(e).__name__
+)
+```
+
+**Testing Structured Logs**:
+- **IMPORTANT**: Use `StringIO` handler to capture formatted output
+- **DO NOT** use `caplog.records[i].message` (gives raw message, not JSON)
+```python
+import io
+import json
+import logging
+from rlm_mcp.logging_config import StructuredFormatter
+
+def test_structured_logs():
+    log_stream = io.StringIO()
+    handler = logging.StreamHandler(log_stream)
+    handler.setFormatter(StructuredFormatter())
+
+    logger = logging.getLogger("test")
+    logger.addHandler(handler)
+    logger.info("Test message")
+
+    # Parse JSON output
+    output = log_stream.getvalue()
+    log_data = json.loads(output.strip())
+
+    assert log_data["level"] == "INFO"
+    assert log_data["message"] == "Test message"
+```
+
+**Integration with tool_handler()**:
+- `tool_handler()` decorator automatically logs:
+  - Operation start with input parameter keys
+  - Operation completion with duration and success status
+  - Operation failures with error context
+- All logs include correlation_id for tracing
+- All logs include session_id if present
+- See `src/rlm_mcp/server.py:217-313` for implementation
 
 ## Common Development Patterns
 

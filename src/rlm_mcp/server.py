@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import wraps
@@ -21,10 +22,11 @@ from mcp.types import Tool, TextContent
 from rlm_mcp.config import ServerConfig, ensure_directories, load_config
 from rlm_mcp.models import Session, TraceEntry
 from rlm_mcp.storage import BlobStore, Database
+from rlm_mcp.logging_config import StructuredLogger, correlation_id_var, configure_logging
 
 import logging
 
-logger = logging.getLogger(__name__)
+logger = StructuredLogger(__name__)
 
 # Type for tool handlers
 T = TypeVar("T")
@@ -213,39 +215,60 @@ class RLMServer:
 
 
 def tool_handler(operation: str):
-    """Decorator for tool handlers with tracing and budget middleware.
-    
+    """Decorator for tool handlers with tracing, budget middleware, and structured logging.
+
     Args:
         operation: Canonical operation name (e.g., "rlm.session.create")
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
         async def wrapper(server: RLMServer, **kwargs: Any) -> Any:
+            # Set correlation ID for this operation
+            correlation_id = str(uuid.uuid4())
+            correlation_id_var.set(correlation_id)
+
             start_time = time.time()
             session_id = kwargs.get("session_id")
-            
-            # Budget check (skip only for session.create which has no session_id yet)
-            if session_id and operation != "rlm.session.create":
-                # First verify session exists (avoid confusing error messages)
-                session = await server.db.get_session(session_id)
-                if session is None:
-                    raise ValueError(f"Session not found: {session_id}")
 
-                # Then check budget
-                allowed, used, remaining = await server.check_budget(session_id)
-                if not allowed:
-                    raise ValueError(
-                        f"Tool call budget exceeded: {used} calls used, "
-                        f"{remaining} remaining. Close session or increase max_tool_calls."
-                    )
-                await server.increment_budget(session_id)
-            
-            # Execute handler
+            # Log operation start
+            logger.info(
+                f"Starting {operation}",
+                session_id=session_id,
+                operation=operation,
+                input_keys=list(kwargs.keys())
+            )
+
             try:
+                # Budget check (skip only for session.create which has no session_id yet)
+                if session_id and operation != "rlm.session.create":
+                    # First verify session exists (avoid confusing error messages)
+                    session = await server.db.get_session(session_id)
+                    if session is None:
+                        raise ValueError(f"Session not found: {session_id}")
+
+                    # Then check budget
+                    allowed, used, remaining = await server.check_budget(session_id)
+                    if not allowed:
+                        raise ValueError(
+                            f"Tool call budget exceeded: {used} calls used, "
+                            f"{remaining} remaining. Close session or increase max_tool_calls."
+                        )
+                    await server.increment_budget(session_id)
+
+                # Execute handler
                 result = await func(server, **kwargs)
-                
-                # Log trace
                 duration_ms = int((time.time() - start_time) * 1000)
+
+                # Log operation completion
+                logger.info(
+                    f"Completed {operation}",
+                    session_id=session_id,
+                    operation=operation,
+                    duration_ms=duration_ms,
+                    success=True
+                )
+
+                # Log trace to database
                 if session_id:
                     await server.log_trace(
                         session_id=session_id,
@@ -254,11 +277,23 @@ def tool_handler(operation: str):
                         output_data=result if isinstance(result, dict) else {"result": str(result)},
                         duration_ms=duration_ms,
                     )
-                
+
                 return result
+
             except Exception as e:
-                # Log failed trace
                 duration_ms = int((time.time() - start_time) * 1000)
+
+                # Log error with context
+                logger.error(
+                    f"Failed {operation}: {str(e)}",
+                    session_id=session_id,
+                    operation=operation,
+                    duration_ms=duration_ms,
+                    error=str(e),
+                    error_type=type(e).__name__
+                )
+
+                # Log failed trace to database
                 if session_id:
                     await server.log_trace(
                         session_id=session_id,
@@ -267,8 +302,13 @@ def tool_handler(operation: str):
                         output_data={"error": str(e)},
                         duration_ms=duration_ms,
                     )
+
                 raise
-        
+
+            finally:
+                # Clear correlation ID to prevent leaks
+                correlation_id_var.set(None)
+
         return wrapper
     return decorator
 
@@ -287,6 +327,13 @@ async def create_server(config: ServerConfig | None = None):
 async def run_server() -> None:
     """Run the MCP server."""
     config = load_config()
+
+    # Configure logging before starting server
+    configure_logging(
+        log_level=config.log_level,
+        structured=config.structured_logging,
+        log_file=config.log_file
+    )
 
     async with create_server(config) as server:
         # FastMCP handles stdio internally
