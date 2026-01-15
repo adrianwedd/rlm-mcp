@@ -4,11 +4,11 @@ Provides JSON-formatted logs with correlation IDs and rich context for
 production observability.
 """
 
-import logging
+import contextvars
 import json
+import logging
 from datetime import datetime
 from typing import Any
-import contextvars
 
 # Context variable for correlation ID tracking across async operations
 correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(

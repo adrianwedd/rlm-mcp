@@ -10,22 +10,18 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
 
 from rlm_mcp.config import ServerConfig, ensure_directories, load_config
+from rlm_mcp.index.persistence import IndexPersistence
+from rlm_mcp.logging_config import StructuredLogger, configure_logging, correlation_id_var
 from rlm_mcp.models import Session, TraceEntry
 from rlm_mcp.storage import BlobStore, Database
-from rlm_mcp.logging_config import StructuredLogger, correlation_id_var, configure_logging
-from rlm_mcp.index.persistence import IndexPersistence, IndexMetadata
-
-import logging
 
 logger = StructuredLogger(__name__)
 
@@ -43,18 +39,18 @@ class ToolNamingError(Exception):
 
 def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True):
     """Register a tool with canonical naming.
-    
+
     Args:
         mcp_server: The MCP Server instance
         canonical_name: Canonical tool name (e.g., "rlm.session.create")
         strict: If True (default), fail fast when SDK doesn't support name=.
                 If False, fall back to function names with a warning.
-    
+
     Raises:
         ToolNamingError: In strict mode, if SDK doesn't support canonical naming.
     """
     global _WARNED_NO_NAME_SUPPORT
-    
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         global _WARNED_NO_NAME_SUPPORT
         try:
@@ -63,7 +59,7 @@ def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True)
         except TypeError as e:
             if "name" not in str(e):
                 raise
-            
+
             # SDK doesn't support name= parameter
             if strict:
                 raise ToolNamingError(
@@ -72,7 +68,7 @@ def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True)
                     f"Either upgrade to FastMCP/newer SDK, or set "
                     f"allow_noncanonical_tool_names=True in server config."
                 ) from e
-            
+
             # Compat mode: fall back with one-time warning
             if not _WARNED_NO_NAME_SUPPORT:
                 logger.warning(
@@ -82,9 +78,9 @@ def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True)
                     "expecting canonical names may not work correctly."
                 )
                 _WARNED_NO_NAME_SUPPORT = True
-            
+
             return mcp_server.tool()(func)
-    
+
     return decorator
 
 
@@ -119,23 +115,23 @@ class RLMServer:
 
         # Register tools
         self._register_tools()
-    
+
     async def start(self) -> None:
         """Start the server."""
         await self.db.connect()
-    
+
     async def stop(self) -> None:
         """Stop the server."""
         await self.db.close()
-    
+
     def _register_tools(self) -> None:
         """Register all MCP tools."""
         # Import tool handlers
-        from rlm_mcp.tools.session import register_session_tools
-        from rlm_mcp.tools.docs import register_docs_tools
-        from rlm_mcp.tools.chunks import register_chunk_tools
-        from rlm_mcp.tools.search import register_search_tools
         from rlm_mcp.tools.artifacts import register_artifact_tools
+        from rlm_mcp.tools.chunks import register_chunk_tools
+        from rlm_mcp.tools.docs import register_docs_tools
+        from rlm_mcp.tools.search import register_search_tools
+        from rlm_mcp.tools.session import register_session_tools
 
         # Register each category
         register_session_tools(self)
@@ -143,7 +139,7 @@ class RLMServer:
         register_chunk_tools(self)
         register_search_tools(self)
         register_artifact_tools(self)
-    
+
     def tool(self, name: str):
         """Register a tool with canonical naming.
 
@@ -304,27 +300,27 @@ class RLMServer:
             )
 
     # --- Middleware ---
-    
+
     async def check_budget(self, session_id: str) -> tuple[bool, int, int]:
         """Check if session has remaining tool call budget.
-        
+
         Returns:
             (allowed, used, remaining)
         """
         session = await self.db.get_session(session_id)
         if session is None:
             return False, 0, 0
-        
+
         max_calls = session.config.max_tool_calls
         used = session.tool_calls_used
         remaining = max_calls - used
-        
+
         return remaining > 0, used, remaining
-    
+
     async def increment_budget(self, session_id: str) -> int:
         """Increment tool call counter, return new used count."""
         return await self.db.increment_tool_calls(session_id)
-    
+
     async def log_trace(
         self,
         session_id: str,
@@ -344,28 +340,28 @@ class RLMServer:
             client_reported=client_reported,
         )
         await self.db.create_trace(trace)
-    
+
     def get_char_limit(self, session: Session, limit_type: str) -> int:
         """Get character limit for a session.
-        
+
         Args:
             session: Session instance
             limit_type: 'response' or 'peek'
-            
+
         Returns:
             Character limit
         """
         if limit_type == "peek":
             return session.config.max_chars_per_peek
         return session.config.max_chars_per_response
-    
+
     def truncate_content(
-        self, 
-        content: str, 
+        self,
+        content: str,
         max_chars: int
     ) -> tuple[str, bool]:
         """Truncate content to max chars.
-        
+
         Returns:
             (content, truncated)
         """

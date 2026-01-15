@@ -13,22 +13,22 @@ if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
 
 
-def register_docs_tools(server: "RLMServer") -> None:
+def register_docs_tools(server: RLMServer) -> None:
     """Register document management tools."""
-    
+
     @server.tool("rlm.docs.load")
     async def rlm_docs_load(
         session_id: str,
         sources: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Load documents into the session context.
-        
+
         Args:
             session_id: Session to load into
             sources: List of source specs (type, path, content, etc.)
         """
         return await _docs_load(server, session_id=session_id, sources=sources)
-    
+
     @server.tool("rlm.docs.list")
     async def rlm_docs_list(
         session_id: str,
@@ -36,14 +36,14 @@ def register_docs_tools(server: "RLMServer") -> None:
         offset: int = 0,
     ) -> dict[str, Any]:
         """List documents in session.
-        
+
         Args:
             session_id: Session to query
             limit: Max documents to return
             offset: Pagination offset
         """
         return await _docs_list(server, session_id=session_id, limit=limit, offset=offset)
-    
+
     @server.tool("rlm.docs.peek")
     async def rlm_docs_peek(
         session_id: str,
@@ -52,7 +52,7 @@ def register_docs_tools(server: "RLMServer") -> None:
         end: int = -1,
     ) -> dict[str, Any]:
         """View a portion of a document. Enforces max_chars_per_peek.
-        
+
         Args:
             session_id: Session containing document
             doc_id: Document ID to peek
@@ -64,7 +64,7 @@ def register_docs_tools(server: "RLMServer") -> None:
 
 @tool_handler("rlm.docs.load")
 async def _docs_load(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     sources: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -125,7 +125,9 @@ async def _docs_load(
                 if not path:
                     return None, "Directory source missing path"
 
-                docs = await _load_directory_concurrent(server, session_id, Path(path), source_spec, semaphore)
+                docs = await _load_directory_concurrent(
+                    server, session_id, Path(path), source_spec, semaphore
+                )
             else:
                 return None, f"Unknown source type: {source_type}"
 
@@ -172,7 +174,7 @@ async def _docs_load(
 
 
 async def _load_inline(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     content: str,
     source_spec: dict[str, Any],
@@ -180,7 +182,7 @@ async def _load_inline(
     """Load inline content as document."""
     content_hash = server.blobs.put(content)
     token_hint = source_spec.get("token_count_hint")
-    
+
     doc = Document(
         session_id=session_id,
         content_hash=content_hash,
@@ -193,7 +195,7 @@ async def _load_inline(
 
 
 async def _load_file(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     path: Path,
     source_spec: dict[str, Any],
@@ -201,11 +203,11 @@ async def _load_file(
     """Load a single file as document."""
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-    
+
     content = path.read_text(encoding="utf-8")
     content_hash = server.blobs.put(content)
     token_hint = source_spec.get("token_count_hint")
-    
+
     doc = Document(
         session_id=session_id,
         content_hash=content_hash,
@@ -219,47 +221,47 @@ async def _load_file(
 
 
 async def _load_glob(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     pattern: str,
     source_spec: dict[str, Any],
 ) -> list[Document]:
     """Load files matching glob pattern."""
     import glob as glob_module
-    
+
     recursive = source_spec.get("recursive", False)
     include_pattern = source_spec.get("include_pattern")
     exclude_pattern = source_spec.get("exclude_pattern")
-    
+
     # Find matching files
     if recursive:
         files = list(Path(".").glob(f"**/{pattern}"))
     else:
         files = [Path(p) for p in glob_module.glob(pattern)]
-    
+
     # Filter
     if include_pattern:
         import re
         include_re = re.compile(include_pattern)
         files = [f for f in files if include_re.search(str(f))]
-    
+
     if exclude_pattern:
         import re
         exclude_re = re.compile(exclude_pattern)
         files = [f for f in files if not exclude_re.search(str(f))]
-    
+
     # Load each file
     docs = []
     for file_path in files:
         if file_path.is_file():
             doc = await _load_file(server, session_id, file_path, source_spec)
             docs.append(doc)
-    
+
     return docs
 
 
 async def _load_directory(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     dir_path: Path,
     source_spec: dict[str, Any],
@@ -267,34 +269,34 @@ async def _load_directory(
     """Load all files in directory."""
     if not dir_path.exists():
         raise FileNotFoundError(f"Directory not found: {dir_path}")
-    
+
     if not dir_path.is_dir():
         raise ValueError(f"Not a directory: {dir_path}")
-    
+
     recursive = source_spec.get("recursive", False)
     include_pattern = source_spec.get("include_pattern")
     exclude_pattern = source_spec.get("exclude_pattern")
-    
+
     # Find files
     if recursive:
         files = list(dir_path.rglob("*"))
     else:
         files = list(dir_path.iterdir())
-    
+
     # Filter to files only
     files = [f for f in files if f.is_file()]
-    
+
     # Apply patterns
     if include_pattern:
         import re
         include_re = re.compile(include_pattern)
         files = [f for f in files if include_re.search(str(f))]
-    
+
     if exclude_pattern:
         import re
         exclude_re = re.compile(exclude_pattern)
         files = [f for f in files if not exclude_re.search(str(f))]
-    
+
     # Load each file
     docs = []
     for file_path in files:
@@ -304,14 +306,14 @@ async def _load_directory(
         except Exception:
             # Skip files that can't be read as text
             pass
-    
+
     return docs
 
 
 # --- No-save versions for batch loading ---
 
 async def _load_inline_no_save(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     content: str,
     source_spec: dict[str, Any],
@@ -331,7 +333,7 @@ async def _load_inline_no_save(
 
 
 async def _load_file_no_save(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     path: Path,
     source_spec: dict[str, Any],
@@ -344,7 +346,8 @@ async def _load_file_no_save(
     file_size_mb = path.stat().st_size / (1024 * 1024)
     if file_size_mb > server.config.max_file_size_mb:
         raise ValueError(
-            f"File too large: {path} ({file_size_mb:.1f}MB > {server.config.max_file_size_mb}MB limit)"
+            f"File too large: {path} ({file_size_mb:.1f}MB > "
+            f"{server.config.max_file_size_mb}MB limit)"
         )
 
     content = path.read_text(encoding="utf-8")
@@ -363,7 +366,7 @@ async def _load_file_no_save(
 
 
 async def _load_glob_concurrent(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     pattern: str,
     source_spec: dict[str, Any],
@@ -409,7 +412,7 @@ async def _load_glob_concurrent(
 
 
 async def _load_directory_concurrent(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     dir_path: Path,
     source_spec: dict[str, Any],
@@ -461,7 +464,7 @@ async def _load_directory_concurrent(
 
 @tool_handler("rlm.docs.list")
 async def _docs_list(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     limit: int = 100,
     offset: int = 0,
@@ -470,13 +473,13 @@ async def _docs_list(
     session = await server.db.get_session(session_id)
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
-    
+
     docs = await server.db.get_documents(session_id, limit=limit + 1, offset=offset)
     has_more = len(docs) > limit
     docs = docs[:limit]
-    
+
     total = await server.db.count_documents(session_id)
-    
+
     documents = []
     for doc in docs:
         span_count = await server.db.count_spans_for_document(doc.id)
@@ -488,7 +491,7 @@ async def _docs_list(
             "length_tokens_est": doc.length_tokens_est,
             "span_count": span_count,
         })
-    
+
     return {
         "documents": documents,
         "total": total,
@@ -498,7 +501,7 @@ async def _docs_list(
 
 @tool_handler("rlm.docs.peek")
 async def _docs_peek(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     doc_id: str,
     start: int = 0,
@@ -508,26 +511,26 @@ async def _docs_peek(
     session = await server.db.get_session(session_id)
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
-    
+
     doc = await server.db.get_document(doc_id)
     if doc is None:
         raise ValueError(f"Document not found: {doc_id}")
-    
+
     if doc.session_id != session_id:
         raise ValueError(f"Document {doc_id} not in session {session_id}")
-    
+
     # Get content slice
     content = server.blobs.get_slice(doc.content_hash, start, end)
     if content is None:
         raise ValueError(f"Content not found for document: {doc_id}")
-    
+
     # Apply char limit
     max_chars = server.get_char_limit(session, "peek")
     content, truncated = server.truncate_content(content, max_chars)
-    
+
     # Compute actual end
     actual_end = start + len(content) if end == -1 else min(end, start + len(content))
-    
+
     return {
         "content": content,
         "span": {

@@ -5,11 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from mcp.types import Tool, TextContent
-
-from rlm_mcp.models import Session, SessionConfig, SessionStatus, SessionSummary
-from rlm_mcp.server import tool_handler
 from rlm_mcp.logging_config import StructuredLogger
+from rlm_mcp.models import Session, SessionConfig, SessionStatus
+from rlm_mcp.server import tool_handler
 
 if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
@@ -17,35 +15,35 @@ if TYPE_CHECKING:
 logger = StructuredLogger(__name__)
 
 
-def register_session_tools(server: "RLMServer") -> None:
+def register_session_tools(server: RLMServer) -> None:
     """Register session management tools."""
-    
+
     @server.tool("rlm.session.create")
     async def rlm_session_create(
         name: str | None = None,
         config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new RLM session for processing large contexts.
-        
+
         Args:
             name: Human-readable session name
             config: Session configuration (max_tool_calls, max_chars_per_response, etc.)
         """
         return await _session_create(server, name=name, config=config)
-    
+
     @server.tool("rlm.session.info")
     async def rlm_session_info(session_id: str) -> dict[str, Any]:
         """Get session statistics and configuration.
-        
+
         Args:
             session_id: Session ID to query
         """
         return await _session_info(server, session_id=session_id)
-    
+
     @server.tool("rlm.session.close")
     async def rlm_session_close(session_id: str) -> dict[str, Any]:
         """Mark session complete and persist index metadata.
-        
+
         Args:
             session_id: Session ID to close
         """
@@ -54,7 +52,7 @@ def register_session_tools(server: "RLMServer") -> None:
 
 @tool_handler("rlm.session.create")
 async def _session_create(
-    server: "RLMServer",
+    server: RLMServer,
     name: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -76,20 +74,20 @@ async def _session_create(
 
 @tool_handler("rlm.session.info")
 async def _session_info(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
 ) -> dict[str, Any]:
     """Get session info."""
     session = await server.db.get_session(session_id)
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
-    
+
     doc_count = await server.db.count_documents(session_id)
     stats = await server.db.get_session_stats(session_id)
-    
+
     # Check if index is built
     index_built = session_id in server._index_cache
-    
+
     return {
         "session_id": session.id,
         "name": session.name,
@@ -108,7 +106,7 @@ async def _session_info(
 
 @tool_handler("rlm.session.close")
 async def _session_close(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
 ) -> dict[str, Any]:
     """Close session and flush indexes.

@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
 
 
-def register_search_tools(server: "RLMServer") -> None:
+def register_search_tools(server: RLMServer) -> None:
     """Register search tools."""
-    
+
     @server.tool("rlm.search.query")
     async def rlm_search_query(
         session_id: str,
@@ -28,7 +28,7 @@ def register_search_tools(server: "RLMServer") -> None:
         context_chars: int = 200,
     ) -> dict[str, Any]:
         """Search documents. BM25 index is lazy-built on first use.
-        
+
         Args:
             session_id: Session to search
             query: Search query string
@@ -50,7 +50,7 @@ def register_search_tools(server: "RLMServer") -> None:
 
 @tool_handler("rlm.search.query")
 async def _search_query(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     query: str,
     method: str = "bm25",
@@ -62,14 +62,14 @@ async def _search_query(
     session = await server.db.get_session(session_id)
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
-    
+
     # Get documents to search
     all_docs = await server.db.get_documents(session_id, limit=10000)
     if doc_ids:
         docs = [d for d in all_docs if d.id in doc_ids]
     else:
         docs = all_docs
-    
+
     if not docs:
         return {
             "matches": [],
@@ -77,7 +77,7 @@ async def _search_query(
             "index_built": session_id in server._index_cache,
             "index_built_this_call": False,
         }
-    
+
     # Dispatch to search method
     if method == "bm25":
         matches, index_built_this_call = await _bm25_search(
@@ -91,11 +91,11 @@ async def _search_query(
         index_built_this_call = False
     else:
         raise ValueError(f"Unknown search method: {method}")
-    
+
     # Apply response char limit
     max_chars = server.get_char_limit(session, "response")
-    total_context_chars = sum(len(m.context) for m in matches)
-    
+    sum(len(m.context) for m in matches)
+
     # Truncate matches if needed
     output_matches = []
     chars_used = 0
@@ -109,7 +109,7 @@ async def _search_query(
             break
         output_matches.append(match)
         chars_used += len(match.context)
-    
+
     return {
         "matches": [
             {
@@ -134,7 +134,7 @@ async def _search_query(
 
 
 async def _bm25_search(
-    server: "RLMServer",
+    server: RLMServer,
     session_id: str,
     docs: list,
     query: str,
@@ -152,7 +152,6 @@ async def _bm25_search(
     index = await server.get_or_build_index(session_id)
 
     # Search using BM25Index
-    from rlm_mcp.index.bm25 import ScoredDocument
 
     scored_results = index.search(query, limit=limit)
 
@@ -187,7 +186,7 @@ async def _bm25_search(
 
 
 async def _regex_search(
-    server: "RLMServer",
+    server: RLMServer,
     docs: list,
     query: str,
     limit: int,
@@ -196,24 +195,24 @@ async def _regex_search(
     """Regex pattern search."""
     pattern = re.compile(query, re.IGNORECASE)
     matches = []
-    
+
     for doc in docs:
         content = server.blobs.get(doc.content_hash)
         if not content:
             continue
-        
+
         for match in pattern.finditer(content):
             if len(matches) >= limit:
                 break
-            
+
             match_start = match.start()
             match_end = match.end()
-            
+
             # Extract context
             start = max(0, match_start - context_chars // 2)
             end = min(len(content), match_end + context_chars // 2)
             context = content[start:end]
-            
+
             matches.append(SearchMatch(
                 doc_id=doc.id,
                 span=SpanRef(doc_id=doc.id, start=start, end=end),
@@ -223,15 +222,15 @@ async def _regex_search(
                 highlight_start=match_start - start,
                 highlight_end=match_end - start,
             ))
-        
+
         if len(matches) >= limit:
             break
-    
+
     return matches
 
 
 async def _literal_search(
-    server: "RLMServer",
+    server: RLMServer,
     docs: list,
     query: str,
     limit: int,
@@ -240,28 +239,28 @@ async def _literal_search(
     """Literal string search."""
     query_lower = query.lower()
     matches = []
-    
+
     for doc in docs:
         content = server.blobs.get(doc.content_hash)
         if not content:
             continue
-        
+
         content_lower = content.lower()
         pos = 0
-        
+
         while True:
             idx = content_lower.find(query_lower, pos)
             if idx == -1:
                 break
-            
+
             if len(matches) >= limit:
                 break
-            
+
             # Extract context
             start = max(0, idx - context_chars // 2)
             end = min(len(content), idx + len(query) + context_chars // 2)
             context = content[start:end]
-            
+
             matches.append(SearchMatch(
                 doc_id=doc.id,
                 span=SpanRef(doc_id=doc.id, start=start, end=end),
@@ -271,12 +270,12 @@ async def _literal_search(
                 highlight_start=idx - start,
                 highlight_end=idx - start + len(query),
             ))
-            
+
             pos = idx + 1
-        
+
         if len(matches) >= limit:
             break
-    
+
     return matches
 
 
@@ -293,13 +292,13 @@ def _find_best_match_position(content: str, query: str) -> int:
     idx = content.lower().find(query.lower())
     if idx >= 0:
         return idx
-    
+
     # Try first query token
     tokens = _tokenize(query)
     if tokens:
         idx = content.lower().find(tokens[0])
         if idx >= 0:
             return idx
-    
+
     # Default to start
     return 0

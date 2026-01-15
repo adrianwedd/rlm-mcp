@@ -109,7 +109,7 @@ class ContentNotFoundError(RLMError):
         context_msg: str | None = None,
         **context: Any
     ):
-        msg = f"Content not found in blob store"
+        msg = "Content not found in blob store"
         if context_msg:
             msg += f" ({context_msg})"
         msg += ". The blob store may be corrupted."

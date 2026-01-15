@@ -116,78 +116,78 @@ class BM25Index:
 
 class SessionIndex:
     """Lazy-loaded BM25 index for a session.
-    
+
     The index is built on first query and cached in memory.
     """
-    
+
     def __init__(self, session_id: str):
         self.session_id = session_id
         self._bm25: BM25Okapi | None = None
         self._doc_map: list[tuple[str, str]] = []  # (doc_id, content)
         self._built = False
-    
+
     @property
     def is_built(self) -> bool:
         """Check if index has been built."""
         return self._built
-    
-    def build(self, documents: list["Document"], blobs: "BlobStore") -> None:
+
+    def build(self, documents: list[Document], blobs: BlobStore) -> None:
         """Build the BM25 index from documents.
-        
+
         Args:
             documents: Documents to index
             blobs: Blob store for content retrieval
         """
         if self._built:
             return
-        
+
         corpus = []
         self._doc_map = []
-        
+
         for doc in documents:
             content = blobs.get(doc.content_hash)
             if content:
                 tokens = self._tokenize(content)
                 corpus.append(tokens)
                 self._doc_map.append((doc.id, content))
-        
+
         if corpus:
             self._bm25 = BM25Okapi(corpus)
-        
+
         self._built = True
-    
+
     def search(self, query: str, limit: int = 10) -> list[ScoredDocument]:
         """Search the index.
-        
+
         Args:
             query: Search query
             limit: Maximum results to return
-            
+
         Returns:
             List of scored documents, sorted by score descending
-            
+
         Raises:
             RuntimeError: If index not built
         """
         if not self._built:
             raise RuntimeError("Index not built. Call build() first.")
-        
+
         if self._bm25 is None:
             return []
-        
+
         query_tokens = self._tokenize(query)
         scores = self._bm25.get_scores(query_tokens)
-        
+
         # Pair scores with doc info
         # Note: Don't filter score > 0 as BM25 can produce negative scores
         scored = [
             (idx, score, self._doc_map[idx])
             for idx, score in enumerate(scores)
         ]
-        
+
         # Sort by score descending
         scored.sort(key=lambda x: x[1], reverse=True)
-        
+
         # Return top results
         results = []
         for idx, score, (doc_id, content) in scored[:limit]:
@@ -196,9 +196,9 @@ class SessionIndex:
                 score=float(score),
                 content=content,
             ))
-        
+
         return results
-    
+
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text for BM25.
 
@@ -212,7 +212,7 @@ class SessionIndex:
             result.extend(token.split('_'))
         # Filter out empty strings
         return [t for t in result if t]
-    
+
     def get_doc_content(self, doc_id: str) -> str | None:
         """Get document content by ID from cached map."""
         for did, content in self._doc_map:

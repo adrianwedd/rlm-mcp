@@ -24,11 +24,11 @@ def generate_id() -> str:
 
 def estimate_tokens(chars: int, hint: int | None = None) -> int:
     """Vendor-neutral token estimation.
-    
+
     Args:
         chars: Character count (ground truth)
         hint: Optional client-provided token count
-        
+
     Returns:
         Estimated token count (~4 chars/token heuristic)
     """
@@ -80,7 +80,7 @@ class DocumentSource(BaseModel):
 
 class Document(BaseModel):
     """Document loaded into session context.
-    
+
     - id (doc_id): Session-scoped stable identifier
     - content_hash: Blob store address; used for dedup across sessions
     """
@@ -126,7 +126,7 @@ class Span(BaseModel):
     strategy: ChunkStrategy
     chunk_index: int | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
+
     def to_ref(self, doc_id: str) -> SpanRef:
         """Convert to SpanRef for provenance."""
         return SpanRef(doc_id=doc_id, start=self.start_offset, end=self.end_offset)
