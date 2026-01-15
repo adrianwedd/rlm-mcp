@@ -118,3 +118,52 @@ class TestDatabase:
         # Verify persisted
         retrieved = await database.get_session(session.id)
         assert retrieved.tool_calls_used == 2
+
+    @pytest.mark.asyncio
+    async def test_span_chunk_index_persistence(self, database: Database):
+        """Test that chunk_index field is persisted and loaded correctly."""
+        from rlm_mcp.models import Session, Document, DocumentSource, Span, ChunkStrategy
+
+        # Create session and document
+        session = Session(name="Test")
+        await database.create_session(session)
+
+        doc = Document(
+            session_id=session.id,
+            content_hash="abc123",
+            source=DocumentSource(type="inline", content="test"),
+            length_chars=4,
+            length_tokens_est=1,
+        )
+        await database.create_document(doc)
+
+        # Create span with chunk_index=5
+        span = Span(
+            document_id=doc.id,
+            start_offset=0,
+            end_offset=4,
+            content_hash="abc123",
+            strategy=ChunkStrategy(type="fixed", chunk_size=4),
+            chunk_index=5,
+        )
+        await database.create_span(span)
+
+        # Reload from database
+        loaded = await database.get_span(span.id)
+        assert loaded is not None
+        assert loaded.chunk_index == 5
+
+        # Test with None chunk_index
+        span2 = Span(
+            document_id=doc.id,
+            start_offset=0,
+            end_offset=4,
+            content_hash="abc123",
+            strategy=ChunkStrategy(type="fixed", chunk_size=4),
+            chunk_index=None,
+        )
+        await database.create_span(span2)
+
+        loaded2 = await database.get_span(span2.id)
+        assert loaded2 is not None
+        assert loaded2.chunk_index is None

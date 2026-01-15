@@ -304,8 +304,8 @@ class Database:
         await self.conn.execute(
             """
             INSERT INTO spans (id, document_id, start_offset, end_offset,
-                              content_hash, strategy, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                              content_hash, strategy, chunk_index, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 span.id,
@@ -314,6 +314,7 @@ class Database:
                 span.end_offset,
                 span.content_hash,
                 span.strategy.model_dump_json(),
+                span.chunk_index,
                 span.created_at.isoformat(),
             ),
         )
@@ -370,6 +371,7 @@ class Database:
             end_offset=row["end_offset"],
             content_hash=row["content_hash"],
             strategy=ChunkStrategy.model_validate_json(row["strategy"]),
+            chunk_index=row["chunk_index"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
