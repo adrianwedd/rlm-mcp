@@ -123,17 +123,27 @@ class Database:
         await self.conn.commit()
     
     async def increment_tool_calls(self, session_id: str) -> int:
-        """Increment tool call counter, return new value."""
-        await self.conn.execute(
-            "UPDATE sessions SET tool_calls_used = tool_calls_used + 1 WHERE id = ?",
-            (session_id,),
-        )
-        await self.conn.commit()
+        """Increment tool call counter atomically, return new value.
+
+        Uses UPDATE with RETURNING clause for atomicity. This prevents race
+        conditions when multiple tool calls happen concurrently on the same session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            New tool_calls_used count after increment
+        """
         async with self.conn.execute(
-            "SELECT tool_calls_used FROM sessions WHERE id = ?", (session_id,)
+            "UPDATE sessions SET tool_calls_used = tool_calls_used + 1 "
+            "WHERE id = ? RETURNING tool_calls_used",
+            (session_id,),
         ) as cursor:
             row = await cursor.fetchone()
-            return row[0] if row else 0
+            if not row:
+                raise ValueError(f"Session not found: {session_id}")
+            await self.conn.commit()
+            return row[0]
     
     def _row_to_session(self, row: aiosqlite.Row) -> Session:
         """Convert database row to Session model."""

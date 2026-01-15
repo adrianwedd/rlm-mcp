@@ -286,6 +286,93 @@ def test_structured_logs():
 - All logs include session_id if present
 - See `src/rlm_mcp/server.py:217-313` for implementation
 
+## Concurrency Model
+
+**Single-Process Architecture**:
+- Per-session locks prevent race conditions during index builds and session cleanup
+- Locks are in-memory `asyncio.Lock` instances (NOT distributed locks)
+- Suitable for single-process deployments (typical MCP server usage)
+- **Multi-process NOT supported** without external coordination
+
+**Lock Infrastructure** (`src/rlm_mcp/server.py`):
+```python
+class RLMServer:
+    def __init__(self, config: ServerConfig | None = None):
+        # Per-session locks (prevent race conditions)
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        # Lock manager lock (protects _session_locks dict)
+        self._lock_manager_lock: asyncio.Lock = asyncio.Lock()
+
+    async def get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create lock for a session (creates if doesn't exist)."""
+        async with self._lock_manager_lock:
+            if session_id not in self._session_locks:
+                self._session_locks[session_id] = asyncio.Lock()
+            return self._session_locks[session_id]
+
+    async def release_session_lock(self, session_id: str) -> None:
+        """Release lock after session close (frees memory)."""
+        async with self._lock_manager_lock:
+            self._session_locks.pop(session_id, None)
+```
+
+**What's Protected**:
+1. **Index Cache Operations**: Concurrent searches on same session only build index once
+2. **Session Close**: Prevents concurrent close attempts, ensures clean shutdown
+3. **Budget Increments**: Atomic UPDATE with RETURNING clause prevents lost updates
+
+**Usage Pattern**:
+```python
+# In tool implementations
+lock = await server.get_session_lock(session_id)
+async with lock:
+    # Critical section: index build, cache update, etc.
+    if session_id not in server._index_cache:
+        index = build_index(...)  # Only one concurrent caller builds
+        server._index_cache[session_id] = index
+```
+
+**Atomic Database Operations**:
+```python
+# Budget increments use atomic UPDATE
+async def increment_tool_calls(self, session_id: str) -> int:
+    async with self.conn.execute(
+        "UPDATE sessions SET tool_calls_used = tool_calls_used + 1 "
+        "WHERE id = ? RETURNING tool_calls_used",
+        (session_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+        await self.conn.commit()
+        return row[0]
+```
+
+**Multi-Process Considerations**:
+If you need multi-process deployments, you must implement external coordination:
+- **Redis locks**: Use `redis-py` with `SET NX EX` for distributed locks
+- **File locks**: Use `fcntl.flock()` on shared filesystem
+- **Database advisory locks**: Use PostgreSQL/MySQL advisory locks
+- **Distributed lock managers**: Use Consul, etcd, ZooKeeper
+
+The current implementation will NOT coordinate across processes. Each process will have its own in-memory locks.
+
+**Testing Concurrency**:
+```python
+# Example: Test concurrent budget increments
+async def test_concurrent_budget_increments():
+    num_increments = 50
+    results = await asyncio.gather(*[
+        server.db.increment_tool_calls(session_id)
+        for _ in range(num_increments)
+    ])
+
+    # Verify atomic behavior
+    session = await server.db.get_session(session_id)
+    assert session.tool_calls_used == num_increments
+    assert len(set(results)) == num_increments  # All unique
+```
+
+See `tests/test_concurrency.py` for comprehensive concurrency tests.
+
 ## Common Development Patterns
 
 **Adding a new tool**:

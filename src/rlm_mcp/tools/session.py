@@ -108,36 +108,48 @@ async def _session_close(
     server: "RLMServer",
     session_id: str,
 ) -> dict[str, Any]:
-    """Close session and flush indexes."""
-    session = await server.db.get_session(session_id)
-    if session is None:
-        raise ValueError(f"Session not found: {session_id}")
-    
-    if session.status != SessionStatus.ACTIVE:
-        raise ValueError(f"Session already closed: {session_id}")
-    
-    # Update session status
-    session.status = SessionStatus.COMPLETED
-    session.closed_at = datetime.utcnow()
-    await server.db.update_session(session)
-    
-    # Get summary stats
-    doc_count = await server.db.count_documents(session_id)
-    span_count = await server.db.count_spans(session_id)
-    artifact_count = await server.db.count_artifacts(session_id)
-    
-    # Clean up index cache
-    if session_id in server._index_cache:
-        del server._index_cache[session_id]
-    
-    return {
-        "session_id": session.id,
-        "status": session.status.value,
-        "closed_at": session.closed_at.isoformat(),
-        "summary": {
-            "documents": doc_count,
-            "spans": span_count,
-            "artifacts": artifact_count,
-            "tool_calls": session.tool_calls_used,
-        },
-    }
+    """Close session and flush indexes.
+
+    Acquires session lock to prevent concurrent operations during cleanup.
+    Releases lock after close completes to free memory.
+    """
+    # Acquire session lock to prevent concurrent operations during close
+    lock = await server.get_session_lock(session_id)
+    async with lock:
+        session = await server.db.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session not found: {session_id}")
+
+        if session.status != SessionStatus.ACTIVE:
+            raise ValueError(f"Session already closed: {session_id}")
+
+        # Update session status
+        session.status = SessionStatus.COMPLETED
+        session.closed_at = datetime.utcnow()
+        await server.db.update_session(session)
+
+        # Get summary stats
+        doc_count = await server.db.count_documents(session_id)
+        span_count = await server.db.count_spans(session_id)
+        artifact_count = await server.db.count_artifacts(session_id)
+
+        # Clean up index cache
+        if session_id in server._index_cache:
+            del server._index_cache[session_id]
+
+        result = {
+            "session_id": session.id,
+            "status": session.status.value,
+            "closed_at": session.closed_at.isoformat(),
+            "summary": {
+                "documents": doc_count,
+                "spans": span_count,
+                "artifacts": artifact_count,
+                "tool_calls": session.tool_calls_used,
+            },
+        }
+
+    # Release lock after close completes (frees memory)
+    await server.release_session_lock(session_id)
+
+    return result

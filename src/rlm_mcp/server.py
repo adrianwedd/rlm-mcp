@@ -88,21 +88,31 @@ def named_tool(mcp_server: FastMCP, canonical_name: str, *, strict: bool = True)
 
 
 class RLMServer:
-    """RLM-MCP Server with middleware for tracing, budgets, and char caps."""
-    
+    """RLM-MCP Server with middleware for tracing, budgets, and char caps.
+
+    Concurrency Model:
+    - Per-session locks prevent race conditions during index builds and session close
+    - Single-process only (locks are in-memory asyncio.Lock instances)
+    - Multi-process deployments require external coordination (Redis, file locks, etc.)
+    """
+
     def __init__(self, config: ServerConfig | None = None):
         self.config = config or load_config()
         ensure_directories(self.config)
-        
+
         self.db = Database(self.config.database_path)
         self.blobs = BlobStore(self.config.blob_dir)
-        
+
         # MCP server instance
         self.mcp = FastMCP("rlm-mcp")
-        
+
         # Session index cache (lazy-built BM25 indexes)
         self._index_cache: dict[str, Any] = {}
-        
+
+        # Per-session concurrency locks (single-process only)
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._lock_manager_lock: asyncio.Lock = asyncio.Lock()
+
         # Register tools
         self._register_tools()
     
@@ -132,17 +142,55 @@ class RLMServer:
     
     def tool(self, name: str):
         """Register a tool with canonical naming.
-        
+
         Uses named_tool wrapper. By default, fails fast if SDK doesn't support
         canonical naming. Set allow_noncanonical_tool_names=True in config
         to fall back to function names (not recommended for production).
-        
+
         Args:
             name: Canonical tool name (e.g., "rlm.session.create")
         """
         strict = not self.config.allow_noncanonical_tool_names
         return named_tool(self.mcp, name, strict=strict)
-    
+
+    # --- Lock Management ---
+
+    async def get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create a lock for a session.
+
+        Locks are session-scoped to prevent race conditions during:
+        - Index building (multiple concurrent searches)
+        - Session close (cleanup operations)
+        - Budget increments (concurrent tool calls)
+
+        IMPORTANT: This is single-process only. Locks are in-memory asyncio.Lock
+        instances and do NOT coordinate across multiple processes. For multi-process
+        deployments, use external coordination (Redis locks, file locks, database
+        advisory locks, etc.).
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            asyncio.Lock instance for this session
+        """
+        async with self._lock_manager_lock:
+            if session_id not in self._session_locks:
+                self._session_locks[session_id] = asyncio.Lock()
+            return self._session_locks[session_id]
+
+    async def release_session_lock(self, session_id: str) -> None:
+        """Release and remove a session lock.
+
+        Called after session close to free memory. The lock should not be held
+        when calling this method.
+
+        Args:
+            session_id: Session identifier
+        """
+        async with self._lock_manager_lock:
+            self._session_locks.pop(session_id, None)
+
     # --- Middleware ---
     
     async def check_budget(self, session_id: str) -> tuple[bool, int, int]:
