@@ -63,8 +63,22 @@ async def _search_query(
     if session is None:
         raise ValueError(f"Session not found: {session_id}")
 
-    # Get documents to search
-    all_docs = await server.db.get_documents(session_id, limit=10000)
+    # Get documents to search (with limit for DOS protection)
+    # Check if session has more docs than limit
+    total_doc_count = await server.db.count_documents(session_id)
+    SEARCH_LIMIT = 10000
+
+    all_docs = await server.db.get_documents(session_id, limit=SEARCH_LIMIT)
+
+    if total_doc_count > SEARCH_LIMIT:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"Session {session_id} has {total_doc_count} documents but search is limited to {SEARCH_LIMIT}. "
+            f"Only the first {SEARCH_LIMIT} documents will be searched. "
+            f"Consider splitting large corpora across multiple sessions."
+        )
+
     if doc_ids:
         docs = [d for d in all_docs if d.id in doc_ids]
     else:

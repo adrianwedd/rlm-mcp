@@ -258,10 +258,21 @@ class RLMServer:
                 session_id=session_id,
             )
 
-            # Get all documents for session
+            # Get all documents for session (with limit for DOS protection)
             from rlm_mcp.index.bm25 import BM25Index
 
-            documents = await self.db.get_documents(session_id, limit=100000)
+            total_doc_count = await self.db.count_documents(session_id)
+            INDEX_BUILD_LIMIT = 100000
+
+            documents = await self.db.get_documents(session_id, limit=INDEX_BUILD_LIMIT)
+
+            if total_doc_count > INDEX_BUILD_LIMIT:
+                logger.warning(
+                    f"Session {session_id} has {total_doc_count} documents but index build is limited to {INDEX_BUILD_LIMIT}. "
+                    f"Only the first {INDEX_BUILD_LIMIT} documents will be indexed. "
+                    f"Consider splitting large corpora across multiple sessions.",
+                    session_id=session_id,
+                )
 
             # Build index
             index = BM25Index()
