@@ -336,7 +336,16 @@ async def _span_get(
         if content is None:
             # Now we have document name for better error message
             chunk_desc = f"chunk #{span.chunk_index}" if span.chunk_index is not None else "chunk"
-            doc_name = doc.metadata.get("name", doc.id) if doc.metadata else doc.id
+
+            # Try metadata["filename"] first (set by file loaders), then source.path basename, then doc.id
+            if doc.metadata and "filename" in doc.metadata:
+                doc_name = doc.metadata["filename"]
+            elif doc.source.path:
+                from pathlib import Path
+                doc_name = Path(doc.source.path).name
+            else:
+                doc_name = doc.id
+
             raise ContentNotFoundError(
                 content_hash=doc.content_hash,
                 context_msg=f"{chunk_desc} in document '{doc_name}' (span {span_id})"
