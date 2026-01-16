@@ -120,6 +120,9 @@ async def _search_query(
             remaining = max_chars - chars_used
             if remaining > 0:
                 match.context = match.context[:remaining]
+                # Re-clamp highlight positions to new context bounds
+                match.highlight_start = max(0, min(match.highlight_start, len(match.context)))
+                match.highlight_end = max(match.highlight_start, min(match.highlight_end, len(match.context)))
                 output_matches.append(match)
             break
         output_matches.append(match)
@@ -162,13 +165,40 @@ async def _bm25_search(
     1. Checks in-memory cache
     2. Tries loading from disk (with staleness check)
     3. Builds from scratch if needed
+
+    Note: Index is built over entire session, but results are filtered by docs parameter.
     """
     # Get or build index (handles persistence)
     index = await server.get_or_build_index(session_id)
 
-    # Search using BM25Index
+    # Build doc_id filter set from docs parameter
+    # (docs is already filtered by doc_ids in caller if provided)
+    allowed_doc_ids = {d.id for d in docs}
+    if not allowed_doc_ids or limit <= 0:
+        return [], False
 
-    scored_results = index.search(query, limit=limit)
+    max_needed = min(limit, len(allowed_doc_ids))
+
+    # Search with exact doc_ids filtering
+    # Iteratively increase batch size until we have enough allowed results
+    # or exhaust the index (prevents silent omission of matches)
+    MAX_SEARCH_LIMIT = 10000  # Cap to prevent DOS
+    batch_size = min(max_needed * 3, MAX_SEARCH_LIMIT)
+    scored_results = []
+
+    while len(scored_results) < max_needed:
+        all_results = index.search(query, limit=batch_size)
+        scored_results = [r for r in all_results if r.doc_id in allowed_doc_ids]
+
+        # Stop if we've exhausted the index or hit the cap
+        if len(all_results) < batch_size or batch_size == MAX_SEARCH_LIMIT:
+            break
+
+        # Double batch size for next iteration
+        batch_size = min(batch_size * 2, MAX_SEARCH_LIMIT)
+
+    # Apply final limit
+    scored_results = scored_results[:max_needed]
 
     # Convert to SearchMatch format
     matches = []
@@ -181,9 +211,9 @@ async def _bm25_search(
         end = min(len(result.content), match_pos + context_chars // 2)
         context = result.content[start:end]
 
-        # Highlight position within context
-        highlight_start = match_pos - start
-        highlight_end = min(highlight_start + len(query), len(context))
+        # Highlight position within context (clamped to bounds)
+        highlight_start = max(0, min(match_pos - start, len(context)))
+        highlight_end = max(highlight_start, min(highlight_start + len(query), len(context)))
 
         matches.append(SearchMatch(
             doc_id=result.doc_id,
@@ -228,14 +258,18 @@ async def _regex_search(
             end = min(len(content), match_end + context_chars // 2)
             context = content[start:end]
 
+            # Clamp highlight positions to context bounds
+            hl_start = max(0, min(match_start - start, len(context)))
+            hl_end = max(hl_start, min(match_end - start, len(context)))
+
             matches.append(SearchMatch(
                 doc_id=doc.id,
                 span=SpanRef(doc_id=doc.id, start=start, end=end),
                 span_id=None,
                 score=1.0,
                 context=context,
-                highlight_start=match_start - start,
-                highlight_end=match_end - start,
+                highlight_start=hl_start,
+                highlight_end=hl_end,
             ))
 
         if len(matches) >= limit:
@@ -276,14 +310,18 @@ async def _literal_search(
             end = min(len(content), idx + len(query) + context_chars // 2)
             context = content[start:end]
 
+            # Clamp highlight positions to context bounds
+            hl_start = max(0, min(idx - start, len(context)))
+            hl_end = max(hl_start, min(idx - start + len(query), len(context)))
+
             matches.append(SearchMatch(
                 doc_id=doc.id,
                 span=SpanRef(doc_id=doc.id, start=start, end=end),
                 span_id=None,
                 score=1.0,
                 context=context,
-                highlight_start=idx - start,
-                highlight_end=idx - start + len(query),
+                highlight_start=hl_start,
+                highlight_end=hl_end,
             ))
 
             pos = idx + 1

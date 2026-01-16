@@ -5,6 +5,59 @@ All notable changes to RLM-MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-01-16
+
+### Bug Fixes
+
+This patch release fixes five bugs identified during code review.
+
+#### Fixed: Server config defaults ignored (#5 - High)
+- **Problem**: Session creation ignored `default_max_*` server config values
+- **Impact**: Users couldn't set organization-wide defaults via config.yaml
+- **Fix**: Merge server defaults with user-provided session config:
+  ```python
+  defaults = {
+      "max_tool_calls": server.config.default_max_tool_calls,
+      "max_chars_per_response": server.config.default_max_chars_per_response,
+      "max_chars_per_peek": server.config.default_max_chars_per_peek,
+  }
+  merged_config = {**defaults, **(config or {})}
+  ```
+
+#### Fixed: doc_ids filter ignored for BM25 search (#6 - High)
+- **Problem**: BM25 searched entire index, ignoring doc_ids parameter
+- **Impact**: Users couldn't scope BM25 search to specific documents
+- **Fix**: Filter BM25 results by doc_ids after search, with 3x limit multiplier to ensure enough results
+
+#### Fixed: session.close blocked by budget (#8 - Medium)
+- **Problem**: session.close could fail if budget was exhausted
+- **Impact**: Users unable to clean up sessions at budget limit
+- **Fix**: Added `rlm.session.close` to budget-exempt operations alongside `rlm.session.create`
+
+#### Fixed: Highlight positions out of bounds (#9 - Medium)
+- **Problem**: `highlight_start` could be negative, `highlight_end` could exceed context length
+- **Impact**: Client highlighting code could crash or display incorrectly
+- **Fix**: Clamp both positions to `[0, len(context)]` in all three search methods (BM25, regex, literal)
+
+#### Fixed: __version__ hardcoded wrong (#10 - Low)
+- **Problem**: `__version__` hardcoded as "0.1.3" instead of dynamic
+- **Impact**: Version reporting incorrect
+- **Fix**: Use `importlib.metadata.version()` with fallback for editable installs
+
+### Testing
+- **Test count**: 101 tests (was 90 in v0.2.1)
+- **New tests** (`test_v022_fixes.py`):
+  - `test_version_is_string`, `test_version_follows_semver_pattern`
+  - `test_session_inherits_server_defaults`, `test_session_config_overrides_server_defaults`
+  - `test_session_close_works_at_zero_budget`
+  - `test_highlight_positions_within_context`, `test_literal_search_highlight_bounds`, `test_regex_search_highlight_bounds`
+  - `test_bm25_respects_doc_ids_filter`, `test_bm25_without_filter_searches_all`, `test_bm25_filter_excludes_unmatched_docs`
+
+### Deferred
+- **#7 Index invalidation race condition**: Deferred to v0.3.0 (requires architectural changes for proper document versioning)
+
+---
+
 ## [0.2.1] - 2026-01-16
 
 ### Bug Fixes

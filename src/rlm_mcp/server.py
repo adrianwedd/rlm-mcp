@@ -406,8 +406,11 @@ def tool_handler(operation: str):
             )
 
             try:
-                # Budget check (skip only for session.create which has no session_id yet)
-                if session_id and operation != "rlm.session.create":
+                # Budget check (skip for session.create and session.close)
+                # - session.create: No session_id yet
+                # - session.close: Cleanup must always succeed
+                budget_exempt = {"rlm.session.create", "rlm.session.close"}
+                if session_id and operation not in budget_exempt:
                     # First verify session exists (avoid confusing error messages)
                     session = await server.db.get_session(session_id)
                     if session is None:

@@ -14,7 +14,12 @@ Key features:
 Tool naming convention: rlm.<category>.<action>
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("rlm-mcp")
+except PackageNotFoundError:
+    __version__ = "0.2.2-dev"  # Fallback for editable installs
 
 from rlm_mcp.server import RLMServer, ToolNamingError, create_server, run_server
 

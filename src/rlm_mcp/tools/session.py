@@ -57,7 +57,14 @@ async def _session_create(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a new session."""
-    session_config = SessionConfig(**(config or {}))
+    # Build session config from server defaults + user overrides
+    defaults = {
+        "max_tool_calls": server.config.default_max_tool_calls,
+        "max_chars_per_response": server.config.default_max_chars_per_response,
+        "max_chars_per_peek": server.config.default_max_chars_per_peek,
+    }
+    merged_config = {**defaults, **(config or {})}
+    session_config = SessionConfig(**merged_config)
     session = Session(name=name, config=session_config)
 
     await server.db.create_session(session)
