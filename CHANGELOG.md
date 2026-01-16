@@ -5,6 +5,59 @@ All notable changes to RLM-MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-01-16
+
+### Bug Fixes
+
+This patch release fixes four high-priority bugs identified during code review.
+
+#### Fixed: AttributeError in error handling (Issue #1)
+- **Problem**: Error handler referenced `doc.name` which doesn't exist on Document model
+- **Impact**: Would crash instead of showing helpful error when blob content is missing
+- **Fix**: Use correct metadata keys with proper fallback chain:
+  1. `metadata["filename"]` (set by file loaders)
+  2. `Path(source.path).name` (basename to avoid path leakage)
+  3. `doc.id` (final fallback)
+
+#### Fixed: chunk_index not persisted to database (Issue #2)
+- **Problem**: `chunk_index` field existed in Span model but wasn't saved/loaded from SQLite
+- **Impact**: Error messages lost chunk context after session reload
+- **Fix**: Added migration `002_add_chunk_index.sql` and updated database operations
+- **Migration**: Runs automatically on server start; existing spans get `NULL` chunk_index
+
+#### Fixed: Hard caps silently truncate documents (Issue #3)
+- **Problem**: Search (10k) and index build (100k) limits silently dropped documents
+- **Impact**: Users unaware that large sessions were being truncated
+- **Fix**: Added warning logs when limits are hit with actionable guidance
+- **Note**: Limits remain for DOS protection; full pagination planned for v0.3.0
+
+#### Fixed: Budget enforcement race condition (Issue #4)
+- **Problem**: Check-then-increment pattern allowed concurrent calls to exceed max_tool_calls
+- **Impact**: N concurrent calls at budget boundary could overshoot by N-1
+- **Fix**: Atomic `UPDATE...WHERE...RETURNING` ensures exactly one call succeeds at boundary
+- **Test**: New `test_atomic_budget_enforcement_prevents_race` validates fix
+
+### Improved
+
+#### Code Quality
+- Moved inline imports to module level for efficiency (chunks.py, search.py)
+- Added `try_increment_tool_calls()` method for atomic budget operations
+
+### Database
+
+#### Schema Migration
+- **Version 2**: Adds `chunk_index INTEGER` column to spans table
+- **Automatic**: Migration runs on server start if not already applied
+- **Backwards compatible**: Existing data preserved, new column defaults to NULL
+
+### Testing
+- **Test count**: 90 tests (was 88 in v0.2.0)
+- **New tests**:
+  - `test_span_chunk_index_persistence`: Validates chunk_index round-trip
+  - `test_atomic_budget_enforcement_prevents_race`: Validates budget atomicity
+
+---
+
 ## [0.2.0] - 2026-01-15
 
 ### 🎉 Production-Ready Release for Team Environments

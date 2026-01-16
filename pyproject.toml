@@ -1,6 +1,6 @@
 [project]
 name = "rlm-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "Recursive Language Model MCP Server for Claude Code"
 readme = "README.md"
 license = {text = "MIT"}
