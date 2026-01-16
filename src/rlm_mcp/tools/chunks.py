@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rlm_mcp.errors import (
@@ -341,7 +342,6 @@ async def _span_get(
             if doc.metadata and "filename" in doc.metadata:
                 doc_name = doc.metadata["filename"]
             elif doc.source.path:
-                from pathlib import Path
                 doc_name = Path(doc.source.path).name
             else:
                 doc_name = doc.id

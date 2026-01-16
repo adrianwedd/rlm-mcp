@@ -5,6 +5,7 @@ BM25 index is lazy-built on first query and cached per session.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,8 @@ from rlm_mcp.server import tool_handler
 
 if TYPE_CHECKING:
     from rlm_mcp.server import RLMServer
+
+logger = logging.getLogger(__name__)
 
 
 def register_search_tools(server: RLMServer) -> None:
@@ -71,8 +74,6 @@ async def _search_query(
     all_docs = await server.db.get_documents(session_id, limit=SEARCH_LIMIT)
 
     if total_doc_count > SEARCH_LIMIT:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.warning(
             f"Session {session_id} has {total_doc_count} documents but search is limited to {SEARCH_LIMIT}. "
             f"Only the first {SEARCH_LIMIT} documents will be searched. "
