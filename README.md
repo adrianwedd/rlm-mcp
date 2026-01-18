@@ -1,10 +1,13 @@
 # RLM-MCP: Recursive Language Model Server for Claude Code
 
-**Status**: ✅ v0.2.0 - Production-Ready for Team Environments
+**Status**: ✅ v0.2.2 - Production-Ready for Team Environments
 
 A Model Context Protocol (MCP) server implementing the Recursive Language Model pattern from [Zhang et al. (2025)](https://arxiv.org/abs/2512.24601), enabling LLMs to process arbitrarily long contexts by treating prompts as external environment objects.
 
-**What's New in v0.2.0**: Persistent indexes survive restarts • Concurrent session safety • Structured logging with correlation IDs • Batch document loading for 2-3x faster imports
+**What's New in v0.2.x**:
+- **v0.2.2**: Exact BM25 doc_ids filtering • Highlight bounds clamping • Server config defaults • Budget exemption for session.close
+- **v0.2.1**: Atomic budget enforcement • chunk_index persistence • Truncation warnings • Error message improvements
+- **v0.2.0**: Persistent indexes • Concurrent session safety • Structured logging • Batch document loading (2-3x faster)
 
 ## Key Insight
 
@@ -26,9 +29,9 @@ A Model Context Protocol (MCP) server implementing the Recursive Language Model 
 
 ## Status & Validation
 
-**v0.2.0** production-ready validation:
+**v0.2.2** production-ready validation:
 
-- ✅ **88/88 tests passing** (100% functionality + production features)
+- ✅ **103/103 tests passing** (100% functionality + production features)
 - ✅ **All 13 core tools** implemented with canonical naming
 - ✅ **MCP protocol integration** confirmed with real clients
 - ✅ **Large corpus tested** — 1M+ chars loaded and indexed
@@ -39,7 +42,7 @@ A Model Context Protocol (MCP) server implementing the Recursive Language Model 
 
 ### Test Coverage
 - Error handling: 13 tests
-- Concurrency safety: 8 tests
+- Concurrency safety: 9 tests
 - Index persistence: 10 tests
 - Integration workflows: 14 tests
 - Large corpus performance: 5 tests
@@ -47,6 +50,7 @@ A Model Context Protocol (MCP) server implementing the Recursive Language Model 
 - Batch loading: 7 tests
 - Provenance tracking: 8 tests
 - Storage layer: 11 tests
+- v0.2.2 bug fixes: 13 tests
 
 See `MIGRATION_v0.1_to_v0.2.md` for upgrade guide.
 
